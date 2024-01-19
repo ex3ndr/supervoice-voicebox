@@ -2,7 +2,7 @@ import glob
 import torch
 import torchaudio
 import random
-from audio import load_mono_audio
+from .audio import load_mono_audio
 
 class SimpleAudioDataset(torch.utils.data.Dataset):
     
