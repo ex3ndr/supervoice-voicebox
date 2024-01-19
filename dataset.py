@@ -1,19 +1,16 @@
 import glob
 import torch
 import torchaudio
+import random
 from audio import load_mono_audio
-
-def search_wav_files(dir):
-    with open(index, 'r', encoding='utf-8') as fi:
-        return [os.path.join(wav_dir, x.split('|')[0] + '.wav') for x in fi.read().split('\n') if len(x) > 0]
-
 
 class SimpleAudioDataset(torch.utils.data.Dataset):
     
-    def __init__(self, files, sample_rate, samples_size):
+    def __init__(self, files, sample_rate, samples_size, transformer = None):
         self.files = files
         self.sample_rate = sample_rate
         self.samples_size = samples_size
+        self.transformer = transformer
     
     def __getitem__(self, index):
 
@@ -24,12 +21,17 @@ class SimpleAudioDataset(torch.utils.data.Dataset):
         audio = load_mono_audio(filename, self.sample_rate)
 
         # Pad or trim to target duration
-        if audio.shape[0] > self.samples_size:
-            audio = audio[:self.samples_size]
-        elif audio.shape[0] < self.samples_size:
+        if audio.shape[0] >= self.samples_size:
+            audio_start = random.randint(0, audio.shape[0] - self.samples_size)
+            audio = audio[audio_start:audio_start+self.samples_size]
+        elif audio.shape[0] < self.samples_size: # Rare or impossible case - just pad with zeros
             audio = torch.nn.functional.pad(audio, (0, self.samples_size - audio.shape[0]))
 
-        return audio
+        # Transformer
+        if self.transformer is not None:
+            return self.transformer(audio)
+        else:
+            return audio
 
     def __len__(self):
         return len(self.files)
