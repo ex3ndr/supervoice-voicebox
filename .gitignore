@@ -2,3 +2,5 @@
 external_datasets
 __pycache__
 runs
+checkpoints
+eval_vocoder.out

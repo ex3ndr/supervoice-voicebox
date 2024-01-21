@@ -8,6 +8,7 @@ from glob import glob
 from tqdm import tqdm
 import time
 from contextlib import nullcontext
+import shutil
 
 # ML
 import torch
@@ -27,7 +28,7 @@ from train_config import config
 
 init_from = "scratch" # or "scratch" or "resume"
 train_batch_size = 16
-train_epochs = 180
+train_epochs = 3100
 loader_workers = 4
 summary_interval = 100
 save_interval = 1
@@ -98,6 +99,7 @@ scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=config.vocod
 #
 
 def save():
+    global epoch
     torch.save({
 
         # Model
@@ -113,14 +115,15 @@ def save():
          'epoch': epoch, 
          'step': step 
 
-    },  f'./checkpoints/vocoder_{experiment}.pt')
+    },  f'./checkpoints/vocoder_{config.experiment}.pt')
+    shutil.copyfile(f'./checkpoints/vocoder_{config.experiment}.pt', f'./checkpoints/vocoder_{config.experiment}_{epoch}.pt')
 
 def load():
     global step
     global epoch
 
     # Load checkpoint
-    checkpoint = torch.load(f'./checkpoints/vocoder_{experiment}.pt')
+    checkpoint = torch.load(f'./checkpoints/vocoder_{config.experiment}.pt')
 
     # Model
     base_generator.load_state_dict(checkpoint['generator'])
