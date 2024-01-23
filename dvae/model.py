@@ -333,17 +333,17 @@ class DiscreteVAE(nn.Module):
 
     def decode(self, img_seq):
         self.log_codes(img_seq)
-        if not self.training:
-            print("decode")
-            print(img_seq)
+        # if not self.training:
+        #     print("decode")
+        #     print(img_seq)
         if hasattr(self.codebook, "embed_code"):
             image_embeds = self.codebook.embed_code(img_seq)
         else:
             image_embeds = F.embedding(img_seq, self.codebook.codebook)
         b, n, d = image_embeds.shape
 
-        if not self.training:
-            print(image_embeds)
+        # if not self.training:
+        #     print(image_embeds)
 
         kwargs = {}
         if self.positional_dims == 1:
@@ -356,10 +356,10 @@ class DiscreteVAE(nn.Module):
         images = [image_embeds]
         for layer in self.decoder:
             r = layer(images[-1])
-            if not self.training:
-                print(layer)
-                print(images[-1])
-                print(r)
+            # if not self.training:
+            #     print(layer)
+            #     print(images[-1])
+            #     print(r)
             images.append(r)
         return images[-1], images[-2]
 

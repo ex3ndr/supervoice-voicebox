@@ -165,7 +165,7 @@ def train_epoch():
 
         # Backward pass
         # loss = recon_loss + commitment_loss
-        loss = recon_loss.mean() + commitment_loss * 0.1
+        loss = recon_loss.mean() + commitment_loss * 0.01
         loss.backward()
         optim.step()
 
