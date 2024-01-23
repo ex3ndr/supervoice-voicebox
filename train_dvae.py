@@ -32,7 +32,7 @@ train_epochs = 3100
 loader_workers = 16
 summary_interval = 100
 save_interval = 1
-device = 'cuda:1'
+device = 'cuda:0'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
 enable_autocast = False
 enable_compile = False
@@ -57,7 +57,11 @@ writer = SummaryWriter(f'runs/dvae_{config.experiment}')
 #
 
 def transformer(audio):
-    return spectogram(audio, config.audio.n_fft, config.audio.num_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
+    spec = spectogram(audio, config.audio.n_fft, config.audio.num_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
+    spec = spec / config.dvae.log_mel_multiplier
+    # spec = torch.maximum(spec, spec.max() - 8.0)
+    # spec = (spec + 4.0) / 4.0
+    return spec
     
 training_dataset = SimpleAudioDataset(glob("external_datasets/lj-speech-1.1/wavs/*.wav") + glob("external_datasets/vctk-corpus-0.92/**/*.flac"), config.audio.sample_rate, config.dvae.segment_size, transformer = transformer)
 
@@ -65,7 +69,7 @@ training_dataset = SimpleAudioDataset(glob("external_datasets/lj-speech-1.1/wavs
 # Loader
 #
 
-train_loader = DataLoader(training_dataset, num_workers=loader_workers,  shuffle=False, batch_size=train_batch_size, pin_memory=True, drop_last=True)
+train_loader = DataLoader(training_dataset, num_workers=loader_workers, shuffle=True, batch_size=train_batch_size, pin_memory=True, drop_last=True)
 
 #
 # Model
@@ -161,8 +165,7 @@ def train_epoch():
 
         # Backward pass
         # loss = recon_loss + commitment_loss
-        # loss = recon_loss.mean() + commitment_loss
-        loss = recon_loss.mean()
+        loss = recon_loss.mean() + commitment_loss * 0.1
         loss.backward()
         optim.step()
 
@@ -171,6 +174,7 @@ def train_epoch():
 
         # Summary
         if step % summary_interval == 0:
+            writer.add_scalar("loss/total", loss.mean(), step)
             writer.add_scalar("loss/recon", recon_loss.mean(), step)
             writer.add_scalar("loss/commitment", commitment_loss.mean(), step)
 

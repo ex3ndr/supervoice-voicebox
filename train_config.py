@@ -3,7 +3,7 @@ from utils.misc import dict_to_object
 config = dict_to_object({
 
     # Experiment details
-    "experiment": "sr_24khz",
+    "experiment": "dvae_2gelu",
     "seed": 42,
 
     # Vocoder parameters
@@ -39,12 +39,15 @@ config = dict_to_object({
     "dvae": {
         "tokens": 8192,
 
+        # Audio
+        "log_mel_multiplier": -8.0,
+
         # Training
-        "learning_rate": 0.0002,
+        "learning_rate": 0.00002,
         "adam_b1": 0.8,
         "adam_b2": 0.99,
         "lr_decay": 0.999, # Learning rate decay, applied every epoch of the optimization
-        "segment_size": 32768, # Number of samples in each segment during training
+        "segment_size": 8192, # Number of samples in each segment during training
 
         # Architecture
         "codebook_dim": 512,

@@ -212,7 +212,7 @@ class DiscreteVAE(nn.Module):
         kernel_size=4,
         use_transposed_convs=True,
         encoder_norm=False,
-        activation="relu",
+        activation="gelu",
         smooth_l1_loss=False,
         straight_through=False,
         normalization=None,  # ((0.5,) * 3, (0.5,) * 3),
@@ -245,6 +245,8 @@ class DiscreteVAE(nn.Module):
             act = nn.ReLU
         elif activation == "silu":
             act = nn.SiLU
+        elif activation == "gelu":
+            act = nn.GELU
         else:
             assert NotImplementedError()
 
@@ -331,11 +333,17 @@ class DiscreteVAE(nn.Module):
 
     def decode(self, img_seq):
         self.log_codes(img_seq)
+        if not self.training:
+            print("decode")
+            print(img_seq)
         if hasattr(self.codebook, "embed_code"):
             image_embeds = self.codebook.embed_code(img_seq)
         else:
             image_embeds = F.embedding(img_seq, self.codebook.codebook)
         b, n, d = image_embeds.shape
+
+        if not self.training:
+            print(image_embeds)
 
         kwargs = {}
         if self.positional_dims == 1:
@@ -347,7 +355,12 @@ class DiscreteVAE(nn.Module):
         image_embeds = rearrange(image_embeds, arrange, **kwargs)
         images = [image_embeds]
         for layer in self.decoder:
-            images.append(layer(images[-1]))
+            r = layer(images[-1])
+            if not self.training:
+                print(layer)
+                print(images[-1])
+                print(r)
+            images.append(r)
         return images[-1], images[-2]
 
     def infer(self, img):
