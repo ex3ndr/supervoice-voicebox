@@ -18,7 +18,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 # Local
 from train_config import config
-from utils.dataset import SimpleAudioDataset
+from utils.dataset import SimpleAudioDataset, load_common_voice_files
 from utils.audio import spectogram
 from dvae.model import DiscreteVAE
 
@@ -56,20 +56,39 @@ writer = SummaryWriter(f'runs/dvae_{config.experiment}')
 # Dataset
 #
 
+print("Loading dataset index...")
+languages = glob("external_datasets/common-voice-*/*/")
+train_files = []
+test_files = []
+for language in languages:
+    train_files = train_files + load_common_voice_files(language, "train")
+    test_files = test_files + load_common_voice_files(language, "test")
+
 def transformer(audio):
     spec = spectogram(audio, config.audio.n_fft, config.audio.num_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
     spec = spec / config.dvae.log_mel_multiplier
-    # spec = torch.maximum(spec, spec.max() - 8.0)
-    # spec = (spec + 4.0) / 4.0
     return spec
     
-training_dataset = SimpleAudioDataset(glob("external_datasets/lj-speech-1.1/wavs/*.wav") + glob("external_datasets/vctk-corpus-0.92/**/*.flac"), config.audio.sample_rate, config.dvae.segment_size, transformer = transformer)
+train_dataset = SimpleAudioDataset(train_files, 
+    config.audio.sample_rate, 
+    config.dvae.segment_size, 
+    vad = True,
+    transformer = transformer
+)
+
+test_dataset = SimpleAudioDataset(test_files, 
+    config.audio.sample_rate, 
+    config.dvae.segment_size, 
+    vad = True,
+    transformer = transformer
+)
 
 #
 # Loader
 #
 
-train_loader = DataLoader(training_dataset, num_workers=loader_workers, shuffle=True, batch_size=train_batch_size, pin_memory=True, drop_last=True)
+train_loader = DataLoader(train_dataset, num_workers=loader_workers, shuffle=True, batch_size=train_batch_size, pin_memory=True, drop_last=True)
+test_loader = DataLoader(test_dataset, num_workers=loader_workers, shuffle=True, batch_size=train_batch_size, pin_memory=True, drop_last=True)
 
 #
 # Model
