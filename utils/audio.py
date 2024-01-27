@@ -41,6 +41,23 @@ def melscale_fbanks(n_mels, n_fft, f_min, f_max, sample_rate, device):
         return res
 
 #
+# Resampler
+#
+
+resampler_cache = {}
+def resampler(from_sample_rate, to_sample_rate, device=None):
+    global resampler_cache
+    if device is None:
+        device = "cpu"
+    key = str(from_sample_rate) + "_" + str(to_sample_rate) + "_" + str(device)
+    if key in resampler_cache:
+        return resampler_cache[key]
+    else:
+        res = T.Resample(from_sample_rate, to_sample_rate).to(device)
+        resampler_cache[key] = res
+        return res
+
+#
 # Spectogram caclulcation
 #
 
@@ -75,14 +92,18 @@ def spectogram(audio, n_fft, n_mels, n_hop, n_window, sample_rate):
 # Load Mono Audio
 #
 
-def load_mono_audio(src, sample_rate):
+def load_mono_audio(src, sample_rate, device=None):
 
     # Load audio
     audio, sr = torchaudio.load(src)
 
+    # Move to device
+    if device is not None:
+        audio = audio.to(device)
+
     # Resample
     if sr != sample_rate:
-        audio = torchaudio.transforms.Resample(sr, sample_rate)(audio)
+        audio = resampler(sr, sample_rate, device)(audio)
         sr = sample_rate
 
     # Convert to mono

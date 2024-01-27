@@ -28,7 +28,8 @@ from train_config import config
 # Device and config
 #
 
-experiment = "vocoder"
+experiment = "vocoder_vctk"
+tags = ["vocoder", "vctk"]
 init_from = "scratch" # or "scratch" or "resume"
 train_batch_size = 16
 train_epochs = 3100
@@ -63,20 +64,17 @@ if init_from == "resume":
 #
 
 # writer = SummaryWriter(f'runs/{experiment}')
-wandb.init(project="vocoder", config=config)
+wandb.init(project="vocoder", config=config, tags=tags)
 
 #
 # Dataset
 #
 
-train_files = pandas.read_pickle("datasets/cv_validated_train.pkl")[0].values.tolist()
-test_files = pandas.read_pickle("datasets/cv_validated_test.pkl")[0].values.tolist()
-
+train_files = glob("datasets/vctk-prepared/*/*.wav")
 def transformer(audio):
-    mel = spectogram(audio, config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
-    return mel, audio
-    
-training_dataset = SimpleAudioDataset(train_files, config.audio.sample_rate, config.vocoder.training.segment_size, transformer = transformer)
+    spec = spectogram(audio, config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
+    return spec, audio
+training_dataset = SimpleAudioDataset(train_files,  config.audio.sample_rate, config.vocoder.training.segment_size, transformer = transformer)
 
 #
 # Loader

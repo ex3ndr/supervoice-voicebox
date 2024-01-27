@@ -8,10 +8,10 @@ from .audio import load_mono_audio
 
 class SimpleAudioDataset(torch.utils.data.Dataset):
     
-    def __init__(self, files, sample_rate, samples_size, vad = False, transformer = None):
+    def __init__(self, files, sample_rate, segment_size, vad = False, transformer = None):
         self.files = files
         self.sample_rate = sample_rate
-        self.samples_size = samples_size
+        self.segment_size = segment_size
         self.transformer = transformer
         self.vad = None
         if vad:
@@ -26,11 +26,11 @@ class SimpleAudioDataset(torch.utils.data.Dataset):
         audio = load_mono_audio(filename, self.sample_rate)
 
         # Pad or trim to target duration
-        if audio.shape[0] >= self.samples_size:
-            audio_start = random.randint(0, audio.shape[0] - self.samples_size)
-            audio = audio[audio_start:audio_start+self.samples_size]
-        elif audio.shape[0] < self.samples_size: # Rare or impossible case - just pad with zeros
-            audio = torch.nn.functional.pad(audio, (0, self.samples_size - audio.shape[0]))
+        if audio.shape[0] >= self.segment_size:
+            audio_start = random.randint(0, audio.shape[0] - self.segment_size)
+            audio = audio[audio_start:audio_start+self.segment_size]
+        elif audio.shape[0] < self.segment_size: # Rare or impossible case - just pad with zeros
+            audio = torch.nn.functional.pad(audio, (0, self.segment_size - audio.shape[0]))
 
         # VAD
         if self.vad is not None:
@@ -54,6 +54,39 @@ class SimpleAudioDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.files)
+
+
+class SpecAudioDataset(torch.utils.data.Dataset):
+    
+    def __init__(self, files, segment_size, transformer = None):
+        self.files = files
+        self.segment_size = segment_size
+        self.transformer = transformer
+    
+    def __getitem__(self, index):
+
+        # Load File
+        filename = self.files[index]
+
+        # If in tensor mode
+        audio = torch.load(filename)
+
+        # Pad or trim to target duration
+        if audio.shape[1] >= self.segment_size:
+            audio_start = random.randint(0, audio.shape[1] - self.segment_size)
+            audio = audio[:, audio_start:audio_start+self.segment_size]
+        elif audio.shape[1] < self.segment_size: # Rare or impossible case - just pad with zeros
+            audio = torch.nn.functional.pad(audio, (0, self.segment_size - audio.shape[1]))
+
+        # Transformer
+        if self.transformer is not None:
+            return self.transformer(audio)
+        else:
+            return audio
+
+    def __len__(self):
+        return len(self.files)
+
 
 
 def load_common_voice_files(path, split):

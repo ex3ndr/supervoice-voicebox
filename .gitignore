@@ -7,3 +7,4 @@ eval_vocoder.out
 gpt_dataset.jsonl
 datasets
 wandb
+.mfa
