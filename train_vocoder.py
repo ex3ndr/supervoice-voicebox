@@ -26,12 +26,13 @@ from train_config import config
 # Device and config
 #
 
+experiment = "vocoder"
 init_from = "scratch" # or "scratch" or "resume"
 train_batch_size = 16
 train_epochs = 3100
 loader_workers = 4
 summary_interval = 100
-save_interval = 1
+save_interval = 10000
 device = 'cuda:0'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
 enable_autocast = False
@@ -50,7 +51,16 @@ torch.set_float32_matmul_precision('high')
 # Logger
 #
 
-writer = SummaryWriter(f'runs/vocoder_{config.experiment}')
+writer = SummaryWriter(f'runs/{experiment}')
+
+#
+# Resuming
+#
+
+checkpoint = None
+if init_from == "resume":
+    checkpoint = torch.load(f'./checkpoints/{experiment}.pt')
+    config = checkpoint['config'] # Reload config
 
 #
 # Dataset
@@ -115,15 +125,10 @@ def save():
          'epoch': epoch, 
          'step': step 
 
-    },  f'./checkpoints/vocoder_{config.experiment}.pt')
-    shutil.copyfile(f'./checkpoints/vocoder_{config.experiment}.pt', f'./checkpoints/vocoder_{config.experiment}_{epoch}.pt')
+    },  f'./checkpoints/{experiment}.pt')
+    shutil.copyfile(f'./checkpoints/{experiment}.pt', f'./checkpoints/{experiment}_step_{step}.pt')
 
-def load():
-    global step
-    global epoch
-
-    # Load checkpoint
-    checkpoint = torch.load(f'./checkpoints/vocoder_{config.experiment}.pt')
+if checkpoint is not None:
 
     # Model
     base_generator.load_state_dict(checkpoint['generator'])
@@ -137,12 +142,8 @@ def load():
     scheduler_d.load_state_dict(checkpoint['scheduler_d'])
     epoch = checkpoint['epoch']
     step = checkpoint['step']
+
     print(f'Loaded at #{epoch}/{step}')
-
-# Do load if needed
-if init_from == "resume":
-    load()
-
 
 #
 # Training
@@ -163,7 +164,7 @@ def train_epoch():
 
         # Generate
         y_g_hat = generator(x)
-        y_g_hat_mel = spectogram(y_g_hat.squeeze(1), config.audio.n_fft, config.audio.num_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
+        y_g_hat_mel = spectogram(y_g_hat.squeeze(1), config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
 
         #
         # Discriminator Optimisation
@@ -213,6 +214,10 @@ def train_epoch():
             writer.add_scalar("loss/generator_all", loss_gen_all, step)
             writer.add_scalar("loss/generator_mel", loss_mel, step)
         
+        # Save
+        if step % save_interval == 0:
+            save()
+        
     # Advance
     epoch = epoch + 1
     scheduler_g.step()
@@ -235,5 +240,4 @@ while epoch < train_epochs:
     print(f'#{epoch} in {duration} ms')
 
     # Save
-    if epoch % save_interval == 0:
-        save()
+    save()

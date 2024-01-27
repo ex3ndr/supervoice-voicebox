@@ -21,13 +21,13 @@ import pandas
 from train_config import config
 from utils.dataset import SimpleAudioDataset, load_common_voice_files
 from utils.audio import spectogram
-from dvae.model import DiscreteVAE
+from voicebox.model import VoiceBoxModule
 
 #
 # Device and config
 #
 
-init_from = "resume" # or "scratch" or "resume"
+init_from = "scratch" # or "scratch" or "resume"
 train_batch_size = 12
 train_epochs = 3100
 loader_workers = 24
@@ -36,7 +36,7 @@ save_interval = 10000
 device = 'cuda:0'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
 enable_autocast = False
-enable_compile = True
+enable_compile = False
 
 #
 # Precision
@@ -51,7 +51,7 @@ torch.set_float32_matmul_precision('high')
 # Logger
 #
 
-writer = SummaryWriter(f'runs/dvae_{config.experiment}')
+writer = SummaryWriter(f'runs/voicebox_{config.experiment}')
 
 #
 # Dataset
@@ -67,19 +67,18 @@ test_files = pandas.read_pickle("datasets/cv_validated_test.pkl")[0].values.toli
 
 def transformer(audio):
     spec = spectogram(audio, config.audio.n_fft, config.audio.num_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
-    spec = spec / config.dvae.log_mel_multiplier
     return spec
     
 train_dataset = SimpleAudioDataset(train_files, 
     config.audio.sample_rate, 
-    config.dvae.segment_size, 
+    config.voicebox.segment_size, 
     vad = True,
     transformer = transformer
 )
 
 test_dataset = SimpleAudioDataset(test_files, 
     config.audio.sample_rate, 
-    config.dvae.segment_size, 
+    config.voicebox.segment_size, 
     vad = True,
     transformer = transformer
 )
@@ -95,35 +94,19 @@ test_loader = DataLoader(test_dataset, num_workers=loader_workers, shuffle=True,
 # Model
 #
 
-epoch = -1
+epoch = 0
 step = 0
-base_dvae = DiscreteVAE(
-
-    # Base mel spec parameters
-    positional_dims=1,
-    channels=config.audio.num_mels,
-
-    # Number of possible tokens
-    num_tokens=config.dvae.tokens,
-
-    # Architecture
-    codebook_dim=config.dvae.codebook_dim,
-    hidden_dim=config.dvae.hidden_dim,
-    num_resnet_blocks=config.dvae.num_resnet_blocks,
-    kernel_size=config.dvae.kernel_size,
-    num_layers=config.dvae.num_layers,
-    use_transposed_convs=False,
-).to(device)
-dvae = base_dvae
+base_model = VoiceBoxModule(config).to(device)
+model = base_model
 if enable_compile:
-    dvae = torch.compile(dvae)
+    model = torch.compile(model)
 
 #
 # Optimizer
 #
 
-optim = torch.optim.AdamW(dvae.parameters(), config.dvae.learning_rate, betas=[config.dvae.adam_b1, config.dvae.adam_b2])
-scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=config.dvae.lr_decay, last_epoch=epoch)
+optim = torch.optim.AdamW(base_model.parameters(), config.voicebox.learning_rate, betas=[config.voicebox.adam_b1, config.voicebox.adam_b2])
+scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, gamma=config.voicebox.lr_decay, last_epoch=epoch)
 
 #
 # Save/Load
@@ -134,7 +117,7 @@ def save():
     torch.save({
 
         # Model
-        'dvae': base_dvae.state_dict(), 
+        'model': base_model.state_dict(), 
 
          # Optimizer
          'optimizer': optim.state_dict(), 
@@ -142,18 +125,18 @@ def save():
          'epoch': epoch, 
          'step': step 
 
-    },  f'./checkpoints/dvae_{config.experiment}.pt')
-    shutil.copyfile(f'./checkpoints/dvae_{config.experiment}.pt', f'./checkpoints/dvae_{config.experiment}_step_{step}.pt')
+    },  f'./checkpoints/voicebox_{config.experiment}.pt')
+    shutil.copyfile(f'./checkpoints/voicebox_{config.experiment}.pt', f'./checkpoints/voicebox_{config.experiment}_step_{step}.pt')
 
 def load():
     global step
     global epoch
 
     # Load checkpoint
-    checkpoint = torch.load(f'./checkpoints/dvae_{config.experiment}.pt')
+    checkpoint = torch.load(f'./checkpoints/voicebox_{config.experiment}.pt')
 
     # Model
-    base_dvae.load_state_dict(checkpoint['dvae'])
+    base_model.load_state_dict(checkpoint['model'])
 
     # Optimizer
     optim.load_state_dict(checkpoint['optimizer'])
@@ -180,14 +163,9 @@ def train_epoch():
         # Load batch and move to GPU
         x = x.to(device, non_blocking=True)
 
-        # Forward pass
+        # Fit
         optim.zero_grad()
-        recon_loss, commitment_loss, out = dvae.forward(x)
-        # print(recon_loss.shape, commitment_loss.shape, out.shape)
-
-        # Backward pass
-        # loss = recon_loss + commitment_loss
-        loss = recon_loss.mean() + commitment_loss * 0.01
+        loss = model.forward(x)
         loss.backward()
         optim.step()
 
@@ -196,9 +174,7 @@ def train_epoch():
 
         # Summary
         if step % summary_interval == 0:
-            writer.add_scalar("loss/total", loss.mean(), step)
-            writer.add_scalar("loss/recon", recon_loss.mean(), step)
-            writer.add_scalar("loss/commitment", commitment_loss.mean(), step)
+            writer.add_scalar("loss/total", loss, step)
 
         # Save
         if step % save_interval == 0:

@@ -79,7 +79,7 @@ class Generator(torch.nn.Module):
         self.config = config
         self.num_kernels = len(config.vocoder.resblock_kernel_sizes)
         self.num_upsamples = len(config.vocoder.upsample_rates)
-        self.conv_pre = weight_norm(Conv1d(config.audio.num_mels, config.vocoder.upsample_initial_channel, 7, 1, padding=3))
+        self.conv_pre = weight_norm(Conv1d(config.audio.n_mels, config.vocoder.upsample_initial_channel, 7, 1, padding=3))
         resblock = ResBlock1 if config.vocoder.resblock == '1' else ResBlock2
 
         # Upsample blocks

@@ -50,3 +50,6 @@ def dict_to_object(src):
         def __repr__(self):
             return f"{self.__dict__}"
     return DictToObject(src)
+
+def exists(val):
+    return val is not None
