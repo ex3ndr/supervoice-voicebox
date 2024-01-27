@@ -14,8 +14,9 @@ import shutil
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DistributedSampler, DataLoader
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 import pandas
+import wandb
 
 # Local
 from vocoder.model import Generator, MultiPeriodDiscriminator, MultiScaleDiscriminator, feature_loss, generator_loss, discriminator_loss
@@ -49,12 +50,6 @@ autocast = nullcontext() if device_type == 'cpu' or not enable_autocast else tor
 torch.set_float32_matmul_precision('high')
 
 #
-# Logger
-#
-
-writer = SummaryWriter(f'runs/{experiment}')
-
-#
 # Resuming
 #
 
@@ -62,6 +57,13 @@ checkpoint = None
 if init_from == "resume":
     checkpoint = torch.load(f'./checkpoints/{experiment}.pt')
     config = checkpoint['config'] # Reload config
+
+#
+# Logger
+#
+
+# writer = SummaryWriter(f'runs/{experiment}')
+wandb.init(project="vocoder", config=config)
 
 #
 # Dataset
@@ -213,10 +215,16 @@ def train_epoch():
 
         # Summary
         if step % summary_interval == 0:
-            writer.add_scalar("loss/mpd", loss_disc_f, step)
-            writer.add_scalar("loss/msd", loss_disc_s, step)
-            writer.add_scalar("loss/generator_all", loss_gen_all, step)
-            writer.add_scalar("loss/generator_mel", loss_mel, step)
+            wandb.log({
+                "loss/mpd": loss_disc_f,
+                "loss/msd": loss_disc_s,
+                "loss/generator_all": loss_gen_all,
+                "loss/generator_mel": loss_mel,
+            }, step=step)
+            # writer.add_scalar("loss/mpd", loss_disc_f, step)
+            # writer.add_scalar("loss/msd", loss_disc_s, step)
+            # writer.add_scalar("loss/generator_all", loss_gen_all, step)
+            # writer.add_scalar("loss/generator_mel", loss_mel, step)
         
         # Save
         if step % save_interval == 0:
