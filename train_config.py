@@ -7,19 +7,19 @@ config = dict_to_object({
 
         # Architecture
         "resblock": "1",
-        "upsample_rates": [8,8,2,2],
-        "upsample_kernel_sizes": [16,16,4,4],
+        "upsample_rates": [5,4,4,2],
+        "upsample_kernel_sizes": [11,8,8,4],
         "upsample_initial_channel": 512,
         "resblock_kernel_sizes": [3,7,11],
         "resblock_dilation_sizes": [[1,3,5], [1,3,5], [1,3,5]],
 
         # Training
         "training": {
+            "segment_size": 8000, # Should be multipliy of sample_rate * 0.01
             "learning_rate": 0.0002,
             "adam_b1": 0.8,
             "adam_b2": 0.99,
-            "lr_decay": 0.999, # Learning rate decay, applied every epoch of the optimization
-            "segment_size": 8192, # Number of samples in each segment during training
+            "lr_decay": 0.999,
         }
     },
 

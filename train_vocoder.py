@@ -15,6 +15,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DistributedSampler, DataLoader
 from torch.utils.tensorboard import SummaryWriter
+import pandas
 
 # Local
 from vocoder.model import Generator, MultiPeriodDiscriminator, MultiScaleDiscriminator, feature_loss, generator_loss, discriminator_loss
@@ -66,11 +67,14 @@ if init_from == "resume":
 # Dataset
 #
 
+train_files = pandas.read_pickle("datasets/cv_validated_train.pkl")[0].values.tolist()
+test_files = pandas.read_pickle("datasets/cv_validated_test.pkl")[0].values.tolist()
+
 def transformer(audio):
-    mel = spectogram(audio, config.audio.n_fft, config.audio.num_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
+    mel = spectogram(audio, config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
     return mel, audio
     
-training_dataset = SimpleAudioDataset(glob("external_datasets/lj-speech-1.1/wavs/*.wav"), config.audio.sample_rate, config.vocoder.segment_size, transformer = transformer)
+training_dataset = SimpleAudioDataset(train_files, config.audio.sample_rate, config.vocoder.training.segment_size, transformer = transformer)
 
 #
 # Loader
@@ -99,10 +103,10 @@ if enable_compile:
 # Optimizer
 #
 
-optim_g = torch.optim.AdamW(generator.parameters(), config.vocoder.learning_rate, betas=[config.vocoder.adam_b1, config.vocoder.adam_b2])
-optim_d = torch.optim.AdamW(itertools.chain(msd.parameters(), mpd.parameters()), config.vocoder.learning_rate, betas=[config.vocoder.adam_b1, config.vocoder.adam_b2])
-scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=config.vocoder.lr_decay, last_epoch=epoch)
-scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=config.vocoder.lr_decay, last_epoch=epoch)
+optim_g = torch.optim.AdamW(generator.parameters(), config.vocoder.training.learning_rate, betas=[config.vocoder.training.adam_b1, config.vocoder.training.adam_b2])
+optim_d = torch.optim.AdamW(itertools.chain(msd.parameters(), mpd.parameters()), config.vocoder.training.learning_rate, betas=[config.vocoder.training.adam_b1, config.vocoder.training.adam_b2])
+scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=config.vocoder.training.lr_decay, last_epoch=epoch)
+scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=config.vocoder.training.lr_decay, last_epoch=epoch)
 
 #
 # Save/Load
@@ -228,7 +232,7 @@ def train_epoch():
 # Start Training
 #
 
-print(f'Training {config.experiment} on {device} with {dtype} precision')
+print(f'Training {experiment} on {device} with {dtype} precision')
 while epoch < train_epochs:
 
     # Train

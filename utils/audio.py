@@ -53,6 +53,7 @@ def spectogram(audio, n_fft, n_mels, n_hop, n_window, sample_rate):
     stft = torch.stft(audio, 
         n_fft, 
         hop_length=n_hop, 
+        win_length=n_window,
         window=window, 
         return_complex=False
     )
