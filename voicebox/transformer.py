@@ -1,6 +1,8 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 from einops import rearrange, repeat, reduce, pack, unpack
+from torch.cuda.amp import autocast
 
 class Transformer(nn.Module):
     def __init__(self, 
@@ -15,23 +17,23 @@ class Transformer(nn.Module):
         self.n_layers = n_layers
 
         # Attention blocks
-        self.layers = nn.ModuleList([])
+        self.layers = torch.nn.ModuleList([])
         for i in range(n_layers):
             self.layers.append(AttentionBlock(
                 n_heads = n_heads, 
                 n_dim = n_dim, 
                 n_dim_head = n_dim_head, 
                 n_dim_ffn = n_dim_ffn,
-                dropout = attn_dropout
+                dropout = dropout
             ))
         
         # Skip connections
-        self.skip_combiners = nn.ModuleList([])
+        self.skip_combiners = torch.nn.ModuleList([])
         for i in range(n_layers//2):
-            self.skip_combiners.append(nn.Linear(n_dim * 2, n_dim))
+            self.skip_combiners.append(torch.nn.Linear(n_dim * 2, n_dim))
 
 
-    def forward(self, x, mask = None):
+    def forward(self, x, rotary_embed = None):
         batch, seq_len, *_ = x.shape
 
         # Run through attention blocks
@@ -45,7 +47,7 @@ class Transformer(nn.Module):
                 x = self.skip_combiners[i - (self.n_layers // 2)](x)
 
             # Attention
-            x = self.layers[i](x, mask = mask)
+            x = self.layers[i](x, rotary_embed = rotary_embed)
 
             # Skip connection
             if i <= self.n_layers // 2:
@@ -57,9 +59,10 @@ class Transformer(nn.Module):
 
 class AttentionBlock(torch.nn.Module):
     def __init__(self, n_heads, n_dim, n_dim_head, n_dim_ffn, dropout):
-        super(Attention, self).__init__()
+        super(AttentionBlock, self).__init__()
 
         self.n_heads = n_heads
+        self.n_dim_head = n_dim_head
         self.dropout = dropout
 
         # Attention input layer norm
@@ -82,23 +85,29 @@ class AttentionBlock(torch.nn.Module):
         self.mlp_output = nn.Linear(n_dim_ffn, n_dim)
         self.mlp_output_dropout = nn.Dropout(dropout)
 
-    def forward(self, x, mask = None):
+    def forward(self, x, rotary_embed = None):
         residual = x # Save for residual connection
 
         # Input normalization
         y = self.attention_ln(x)
 
         # Calculation Q/K/V for each head
-        q, k, v = self.to_qkv(x).chunk(3, dim = -1)
+        q, k, v = self.attention(x).chunk(3, dim = -1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.n_heads), (q, k, v))
 
+        # Rotary embedding
+        if rotary_embed is not None:
+            q = apply_rotary_pos_emb(q, rotary_embed)
+            k = apply_rotary_pos_emb(k, rotary_embed)
+
         # Dot product attention
-        y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=self.dropout)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        B, T, C = x.size() # batch size, sequence length, context width
+        y = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout)
+        y = y.transpose(1, 2).contiguous().view(B, T, self.n_heads * self.n_dim_head) # re-assemble all head outputs side by side
 
         # Output
-        y = self.output(y)
-        y = self.output_dropout(y)
+        y = self.attention_output(y)
+        y = self.attention_output_dropout(y)
         y = residual + y
 
         # MLP
@@ -111,11 +120,13 @@ class AttentionBlock(torch.nn.Module):
 
         return y
 
-class ConvPositionEmbed(Module):
+#
+# Convolutional positional embedding
+#
+
+class ConvPositionEmbed(nn.Module):
     def __init__(self, n_dim, kernel_size):
         super().__init__()
-        assert is_odd(kernel_size)
-
         self.dw_conv1d = nn.Sequential(nn.Conv1d(n_dim, n_dim, kernel_size, groups = n_dim, padding = kernel_size // 2), nn.GELU())
 
     def forward(self, x, mask = None):
@@ -132,3 +143,35 @@ class ConvPositionEmbed(Module):
             out = out.masked_fill(~mask, 0.)
 
         return out
+
+
+#
+# Rotary positional embedding
+#
+
+class RotaryEmbedding(nn.Module):
+    def __init__(self, dim, theta = 50000):
+        super().__init__()
+        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+
+    @property
+    def device(self):
+        return self.inv_freq.device
+
+    @autocast(enabled = False)
+    def forward(self, t):
+        if not torch.is_tensor(t):
+            t = torch.arange(t, device = self.device)
+        t = t.type_as(self.inv_freq)
+        freqs = torch.einsum('i , j -> i j', t, self.inv_freq)
+        freqs = torch.cat((freqs, freqs), dim = -1)
+        return freqs
+
+def rotate_half(x):
+    x1, x2 = x.chunk(2, dim = -1)
+    return torch.cat((-x2, x1), dim = -1)
+
+@autocast(enabled = False)
+def apply_rotary_pos_emb(pos, t):
+    return t * pos.cos() + rotate_half(t) * pos.sin()

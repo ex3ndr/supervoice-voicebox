@@ -1,15 +1,22 @@
 import torch
-from transformer import Transformer, ConvPositionEmbed
+import torch.nn.functional as F
+from .transformer import Transformer, RotaryEmbedding, ConvPositionEmbed
 
 class DurationPredictor(torch.nn.Module):
     def __init__(self, n_tokens):
         super(DurationPredictor, self).__init__()
         
         # Embedding
-        self.token_embedding = nn.Embedding(n_tokens, 511) # Keep one for duration
+        self.token_embedding = torch.nn.Embedding(n_tokens, 512) # Keep one for duration
 
         # Convolutional positional encoder
         self.conv_embed = ConvPositionEmbed(n_dim = 512, kernel_size = 31)
+
+        # Rotational embedding
+        self.rotary_embed = RotaryEmbedding(dim = 512)
+
+        # Transformer input
+        self.transformer_input = torch.nn.Linear(512 + 1, 512)
         
         # Transformer
         self.transformer = Transformer(
@@ -22,9 +29,13 @@ class DurationPredictor(torch.nn.Module):
         )
 
         # Prediction
-        self.prediction = nn.Linear(n_dim, 1)
+        self.prediction = torch.nn.Linear(512, 1)
 
-    def forward(self, x, y, mask):
+    def forward(self, x, y, mask, target = None):
+
+        #
+        # Prepare
+        #
 
         # Check shapes
         assert x.shape[0] == y.shape[0] == mask.shape[0] # Batch
@@ -33,22 +44,65 @@ class DurationPredictor(torch.nn.Module):
         # Convert durations to log durations
         y = torch.log(y.float() + 1)
 
+        # Mask out y
+        y_masked = y.masked_fill(mask, 0.0)
+        y_masked = y_masked.unsqueeze(-1) # (B, T) -> (B, T, 1)
+
+        #
+        # Compute
+        #
+
         # Convert phonemes to embeddings
         x = self.token_embedding(x)
 
         # Combine duration and phoneme embeddings
-        z = torch.cat([x, y], dim = -1)
+        z = torch.cat([y_masked, x], dim = -1)
+
+        # Apply transformer input layer
+        z = self.transformer_input(z)
 
         # Apply convolutional positional encoder
-        z = self.conv_embed(z, mask = mask) + z
+        z = self.conv_embed(z) + z
 
         # Run through transformer
-        z = self.transformer(z, mask = mask)
+        rotary_embed = self.rotary_embed(z.shape[1])
+        z = self.transformer(z, rotary_embed = rotary_embed)
 
         # Predict durations
         z = self.prediction(z)
 
-        # Convert predicted log durations back to durations
-        z = torch.clamp(torch.round(z.exp() - 1), min=0).long()
+        #
+        # Output
+        #
 
-        return z
+        # Convert predicted log durations back to durations
+        predictions = torch.clamp(torch.round(z.exp() - 1), min=0).long()
+        predictions = predictions.squeeze(-1) # (B, T, 1) -> (B, T)
+
+        #
+        # Loss
+        #
+
+        if target is not None:
+
+            # Update shape (B, T) -> (B, T, 1)
+            target = target.unsqueeze(-1)
+
+            # Compute l1 loss
+            loss = F.l1_loss(z, target, reduction = 'none')
+
+            # Zero non-masked values
+            loss = loss.masked_fill(~mask, 0.)
+
+            # Number of masked frames
+            n_masked_frames = mask.sum(dim = -1).clamp(min = 1e-5)
+
+            # Mean loss of expectation over masked loss
+            loss = loss.sum(dim = -1) / n_masked_frames
+
+            # Expectation over loss of batch
+            loss = loss.mean()
+
+            return predictions, loss
+        else:
+            return predictions
