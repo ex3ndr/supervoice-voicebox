@@ -28,6 +28,7 @@ from train_config import config
 # Device and config
 #
 
+project="vocoder"
 experiment = "vocoder_vctk"
 tags = ["vocoder", "vctk"]
 init_from = "scratch" # or "scratch" or "resume"
@@ -64,7 +65,7 @@ if init_from == "resume":
 #
 
 # writer = SummaryWriter(f'runs/{experiment}')
-wandb.init(project="vocoder", config=config, tags=tags)
+wandb.init(project=project, config=config, tags=tags)
 
 #
 # Dataset

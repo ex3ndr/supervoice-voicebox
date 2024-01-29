@@ -95,3 +95,5 @@ def load_common_voice_files(path, split):
         cvs_reader = csv.reader(csvfile, delimiter='\t', quoting=csv.QUOTE_NONE)
         next(cvs_reader, None)  # skip the headers
         return [path + 'clips/' + row[1] for row in cvs_reader]
+
+# def minmum_collator(src):

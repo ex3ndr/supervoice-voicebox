@@ -41,12 +41,15 @@ class DurationPredictor(torch.nn.Module):
         assert x.shape[0] == y.shape[0] == mask.shape[0] # Batch
         assert x.shape[1] == y.shape[1] == mask.shape[1] # Sequence length
 
+        # Reshape inputs
+        mask = mask.unsqueeze(-1) # (B, T) -> (B, T, 1)
+        y = y.unsqueeze(-1) # (B, T) -> (B, T, 1)
+
         # Convert durations to log durations
         y = torch.log(y.float() + 1)
 
         # Mask out y
         y_masked = y.masked_fill(mask, 0.0)
-        y_masked = y_masked.unsqueeze(-1) # (B, T) -> (B, T, 1)
 
         #
         # Compute
@@ -76,7 +79,7 @@ class DurationPredictor(torch.nn.Module):
         #
 
         # Convert predicted log durations back to durations
-        predictions = torch.clamp(torch.round(z.exp() - 1), min=0).long()
+        predictions = torch.clamp(z.exp() - 1, min=0).long()
         predictions = predictions.squeeze(-1) # (B, T, 1) -> (B, T)
 
         #
@@ -84,6 +87,9 @@ class DurationPredictor(torch.nn.Module):
         #
 
         if target is not None:
+
+            # Convert target durations to log durations
+            target = torch.log(target.float() + 1)
 
             # Update shape (B, T) -> (B, T, 1)
             target = target.unsqueeze(-1)
@@ -103,6 +109,6 @@ class DurationPredictor(torch.nn.Module):
             # Expectation over loss of batch
             loss = loss.mean()
 
-            return predictions, loss
+            return predictions, z, target, loss
         else:
-            return predictions
+            return predictions, z

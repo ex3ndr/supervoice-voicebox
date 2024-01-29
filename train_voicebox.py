@@ -94,7 +94,7 @@ test_loader = DataLoader(test_dataset, num_workers=loader_workers, shuffle=True,
 # Model
 #
 
-epoch = 0
+epoch = -1
 step = 0
 base_model = VoiceBoxModule(config).to(device)
 model = base_model
