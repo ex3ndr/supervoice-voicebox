@@ -22,18 +22,18 @@ import wandb
 
 # Local
 from train_config import config
-from voicebox.model_duration import DurationPredictor
+from voicebox.model_audio import AudioModel
 from voicebox.tokenizer import Tokenizer
 
 #
 # Device and config
 #
 
-project="duration"
-experiment = "duration_vctk_long"
-tags = ["duration", "vctk"]
+project="voicebox_audio"
+experiment = "audio"
+tags = ["audio", "vctk"]
 init_from = "scratch" # or "scratch" or "resume"
-train_batch_size = 64
+train_batch_size = 16
 train_steps = 600000
 loader_workers = 4
 summary_interval = 100
@@ -68,7 +68,6 @@ if init_from == "resume":
 # Logger
 #
 
-# writer = SummaryWriter(f'runs/{experiment}')
 wandb.init(project=project, config=config, tags=tags)
 
 #
@@ -76,14 +75,22 @@ wandb.init(project=project, config=config, tags=tags)
 #
 
 print("Loading dataset...")
+
+# Load index
 files = glob("datasets/vctk-aligned/**/*.TextGrid")
-files = [textgrid.TextGrid.fromFile(f) for f in files]
+files = [f[len("datasets/vctk-aligned/"):-len(".TextGrid")] for f in files]
+
+# Load textgrids
+textgrid = [textgrid.TextGrid.fromFile("datasets/vctk-aligned/" + f + ".TextGrid") for f in files]
+
+# Load audio
+files = ["datasets/vctk-prepared/" + f + ".pt" for f in files]
 
 # Tokenizer
 tokenizer = Tokenizer()
 
 # Data extractor
-def extract_data(src):
+def extract_textgrid(src):
 
     # Prepare
     token_duration = 0.01
@@ -109,50 +116,61 @@ def extract_data(src):
         output_tokens.append(tok)
         output_durations.append(duration)
 
-    # Trim start and end silence
-    if output_tokens[0] == 'SIL' and output_durations[0] > 1:
-        output_durations[0] = 1
-    if output_tokens[len(output_tokens) - 1] == 'SIL' and output_durations[len(output_durations) - 1] > 1:
-        output_durations[len(output_durations) - 1] = 1
-
     # Outputs
     return output_tokens, output_durations
 
 class TextGridDataset(torch.utils.data.Dataset):
-    def __init__(self, files):
+    def __init__(self, textgrid, files):
         self.files = files
+        self.textgrid = textgrid
     def __len__(self):
         return len(self.files)        
     def __getitem__(self, index):
-        tg = self.files[index]
 
-        # Load tokens/durations
-        tokens, durations = extract_data(tg)
-        tokens = tokenizer(tokens)
-        durations = torch.Tensor(durations)
+        # Load textgrid and audio
+        tokens, durations = extract_textgrid(self.textgrid[index])
+        audio = torch.load(self.files[index])
+        
+        # Reshape audio (C, T) -> (T, C)
+        audio = audio.transpose(0, 1)
 
-        # Calculate mask
-        if random.uniform(0, 1) < 0.2: # If need to mask
+        # Phonemes
+        phonemes = []
+        for t in range(len(tokens)):
+            tok = tokens[t]
+            for i in range(durations[t]):
+                phonemes.append(tok)
+        phonemes = tokenizer(phonemes)
+
+        # Mask
+        if random.uniform(0, 1) < 0.3: # If need to mask
 
             # How much to mask
-            mask_len = random.uniform(0.1, 1)
+            mask_len = random.uniform(0.7, 1)
 
             # Where to mask
             mask_offset = random.uniform(0, 1 - mask_len)
 
             # Create mask
-            mask = torch.zeros(len(durations))
-            mask_start = math.floor(mask_offset * len(durations))
-            mask_end = math.floor((mask_offset + mask_len) * len(durations))
+            mask = torch.zeros(len(phonemes))
+            mask_start = math.floor(mask_offset * len(phonemes))
+            mask_end = math.floor((mask_offset + mask_len) * len(phonemes))
             mask[mask_start : mask_end] = 1
             mask = mask.bool()
         else:
-            mask = torch.ones(len(durations)).bool() # Mask everything
+            mask = torch.ones(len(phonemes)).bool()
 
-        # Result
-        return tokens, durations, mask
+        # Cut Audio
+        audio = audio[:len(phonemes)]
 
-training_dataset = TextGridDataset(files)
+        # Outputs
+        return phonemes, audio, mask
+
+#
+# Dataset
+#
+
+training_dataset = TextGridDataset(textgrid, files)
 
 #
 # Loader
@@ -188,7 +206,7 @@ train_loader = DataLoader(training_dataset, num_workers=loader_workers, shuffle=
 #
 
 step = 0
-base_model = DurationPredictor(tokenizer.n_tokens).to(device)
+base_model = AudioModel(tokenizer.n_tokens).to(device)
 model = base_model
 if enable_compile:
     model = torch.compile(base_model)
@@ -257,16 +275,14 @@ def train_step():
 
     # Load batch
     batch = next(loader_cycle)
-    tokens, durations, mask = batch
+    tokens, audio, mask = batch
     tokens = tokens.to(device, non_blocking=True)
-    durations = durations.to(device, non_blocking=True)
+    audio = audio.to(device, non_blocking=True)
     mask = mask.to(device, non_blocking=True)
 
     # Run predictor
     optim.zero_grad()
-    predicted, z, target, loss = model(tokens, durations, mask, target = durations)
-    predicted = predicted.float()
-    target = target.float()
+    predicted, loss = model(tokens, audio, mask, target = audio)
 
     # Clip gradients
     torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
@@ -283,15 +299,12 @@ def train_step():
         wandb.log({
             "learning_rate": lr,
             "loss": loss,
-            "z/mean": z.mean(),
-            "z/max": z.max(),
-            "z/min": z.min(),
             "predicted/mean": predicted.mean(),
             "predicted/max": predicted.max(),
             "predicted/min": predicted.min(),
-            "target/mean": target.mean(),
-            "target/max": target.max(),
-            "target/min": target.min(),
+            "target/mean": audio.mean(),
+            "target/max": audio.max(),
+            "target/min": audio.min(),
             "data/length": mask.shape[1],
         }, step=step)
         

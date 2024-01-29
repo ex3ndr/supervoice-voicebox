@@ -7,7 +7,7 @@ class DurationPredictor(torch.nn.Module):
         super(DurationPredictor, self).__init__()
         
         # Embedding
-        self.token_embedding = torch.nn.Embedding(n_tokens, 512) # Keep one for duration
+        self.token_embedding = torch.nn.Embedding(n_tokens, 512)
 
         # Convolutional positional encoder
         self.conv_embed = ConvPositionEmbed(n_dim = 512, kernel_size = 31)
