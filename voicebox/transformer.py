@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import math
 import torch.nn.functional as F
 from einops import rearrange, repeat, reduce, pack, unpack
 from torch.cuda.amp import autocast
@@ -11,10 +12,13 @@ class Transformer(nn.Module):
         n_dim,
         n_dim_head,
         n_dim_ffn,
+        n_non_bias_tokens,
         dropout
     ):
         super(Transformer, self).__init__()
         self.n_layers = n_layers
+        self.n_heads = n_heads
+        self.n_non_bias_tokens = n_non_bias_tokens
 
         # Attention blocks
         self.layers = torch.nn.ModuleList([])
@@ -35,9 +39,24 @@ class Transformer(nn.Module):
         # Output normalization
         self.output_norm = nn.LayerNorm(n_dim, bias=False)
 
+        # ALiBi slopes
+        self.register_buffer('slopes', get_slopes_power_of_2(n_heads))
 
-    def forward(self, x, rotary_embed = None):
+
+    def forward(self, x):
         batch, seq_len, *_ = x.shape
+
+        # Compute ALiBi
+        # This computes ALiBi bias mask, excluding non-bias tokens which are expected to be appended to the end of the sequence
+        # Inspired by: https://github.com/ofirpress/attention_with_linear_biases/issues/5
+        content_len = seq_len - self.n_non_bias_tokens
+        context_position = torch.arange(content_len, device = x.device)[:, None]
+        memory_position = torch.arange(content_len, device = x.device)[None, :]
+        relative_position = memory_position - context_position 
+        relative_position = torch.abs(relative_position).unsqueeze(0).expand(self.n_heads, -1,-1)
+        alibi = self.slopes.unsqueeze(1).unsqueeze(1) * relative_position
+        alibi = alibi.view(1, self.n_heads, content_len, content_len)
+        alibi = torch.nn.functional.pad(alibi, (0, self.n_non_bias_tokens, 0, self.n_non_bias_tokens), value=0)
 
         # Run through attention blocks
         connections = []
@@ -50,7 +69,7 @@ class Transformer(nn.Module):
                 x = self.skip_combiners[i - (self.n_layers // 2)](x)
 
             # Attention
-            x = self.layers[i](x, rotary_embed = rotary_embed)
+            x = self.layers[i](x, alibi)
 
             # Skip connection
             if i <= self.n_layers // 2:
@@ -91,7 +110,7 @@ class AttentionBlock(torch.nn.Module):
         self.mlp_output = nn.Linear(n_dim_ffn, n_dim)
         self.mlp_output_dropout = nn.Dropout(dropout)
 
-    def forward(self, x, rotary_embed = None):
+    def forward(self, x, alibi):
 
         # Residual
         residual = x
@@ -103,14 +122,9 @@ class AttentionBlock(torch.nn.Module):
         q, k, v = self.attention(x).chunk(3, dim = -1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.n_heads), (q, k, v))
 
-        # Rotary embedding
-        if rotary_embed is not None:
-            q = apply_rotary_pos_emb(rotary_embed, q)
-            k = apply_rotary_pos_emb(rotary_embed, k)
-
         # Dot product attention
         B, T, C = x.size() # batch size, sequence length, context width
-        y = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout if self.training else 0.0)
+        y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=alibi, dropout_p=self.dropout if self.training else 0.0) # Using ALiBi as a mask
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_heads * self.n_dim_head) # re-assemble all head outputs side by side
 
         # Output
@@ -155,34 +169,11 @@ class ConvPositionEmbed(nn.Module):
 
         return out
 
-
 #
-# Rotary positional embedding
+# ALiBi implementation
 #
 
-class RotaryEmbedding(nn.Module):
-    def __init__(self, dim, theta = 50000):
-        super().__init__()
-        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer("inv_freq", inv_freq)
-
-    @property
-    def device(self):
-        return self.inv_freq.device
-
-    @autocast(enabled = False)
-    def forward(self, t):
-        if not torch.is_tensor(t):
-            t = torch.arange(t, device = self.device)
-        t = t.type_as(self.inv_freq)
-        freqs = torch.einsum('i , j -> i j', t, self.inv_freq)
-        freqs = torch.cat((freqs, freqs), dim = -1)
-        return freqs
-
-def rotate_half(x):
-    x1, x2 = x.chunk(2, dim = -1)
-    return torch.cat((-x2, x1), dim = -1)
-
-@autocast(enabled = False)
-def apply_rotary_pos_emb(pos, t):
-    return t * pos.cos() + rotate_half(t) * pos.sin()
+def get_slopes_power_of_2(n):
+    start = (2**(-2**-(math.log2(n)-3)))
+    ratio = start
+    return torch.tensor([start*ratio**i for i in range(n)], requires_grad=False) * -1

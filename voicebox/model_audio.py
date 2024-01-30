@@ -1,8 +1,7 @@
 import torch
 import torch.nn.functional as F
 import math
-from .transformer import Transformer, RotaryEmbedding, ConvPositionEmbed
-from .cfm import sample_noisy_value
+from .transformer import Transformer, ConvPositionEmbed
 from einops import rearrange, reduce, repeat
 from torchdiffeq import odeint
 
@@ -20,9 +19,6 @@ class AudioModel(torch.nn.Module):
         # Convolutional positional encoder
         self.conv_embed = ConvPositionEmbed(n_dim = 1024, kernel_size = 31)
 
-        # Rotational embedding
-        self.rotary_embed = RotaryEmbedding(dim = n_dim_head)
-
         # Sinusoidal positional embedding for time
         self.sinu_pos_emb = LearnedSinusoidalPosEmb(1024)
 
@@ -36,6 +32,7 @@ class AudioModel(torch.nn.Module):
             n_dim = 1024,
             n_dim_head = n_dim_head,
             n_dim_ffn = 4096,
+            n_non_bias_tokens = 1, # Exclude time embedding from attention bias
             dropout = 0.1
         )
 
@@ -99,8 +96,7 @@ class AudioModel(torch.nn.Module):
         output = self.conv_embed(output) + output
 
         # Run through transformer
-        rotary_embed = self.rotary_embed(output.shape[1])
-        output = self.transformer(output, rotary_embed = rotary_embed)
+        output = self.transformer(output)
 
         # Predict durations
         output = self.prediction(output)

@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from .transformer import Transformer, RotaryEmbedding, ConvPositionEmbed
+from .transformer import Transformer, ConvPositionEmbed
 
 class DurationPredictor(torch.nn.Module):
     def __init__(self, n_tokens):
@@ -11,9 +11,6 @@ class DurationPredictor(torch.nn.Module):
 
         # Convolutional positional encoder
         self.conv_embed = ConvPositionEmbed(n_dim = 512, kernel_size = 31)
-
-        # Rotational embedding
-        self.rotary_embed = RotaryEmbedding(dim = 512)
 
         # Transformer input
         self.transformer_input = torch.nn.Linear(512 + 1, 512)
@@ -68,8 +65,7 @@ class DurationPredictor(torch.nn.Module):
         z = self.conv_embed(z) + z
 
         # Run through transformer
-        rotary_embed = self.rotary_embed(z.shape[1])
-        z = self.transformer(z, rotary_embed = rotary_embed)
+        z = self.transformer(z)
 
         # Predict durations
         z = self.prediction(z)

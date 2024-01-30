@@ -31,7 +31,7 @@ from utils.tensors import count_parameters
 # Device and config
 #
 
-experiment = "audio_flow_n5"
+experiment = "audio_alibi"
 project="voicebox_audio"
 tags = ["audio", "vctk"]
 init_from = "scratch" # or "scratch" or "resume"
