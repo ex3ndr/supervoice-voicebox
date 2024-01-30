@@ -19,32 +19,35 @@ import torch.nn.functional as F
 from torch.utils.data import DistributedSampler, DataLoader
 import pandas
 import wandb
+from einops import rearrange, reduce, repeat
 
 # Local
 from train_config import config
 from voicebox.model_audio import AudioModel
 from voicebox.tokenizer import Tokenizer
+from utils.tensors import count_parameters
 
 #
 # Device and config
 #
 
+experiment = "audio_flow_n5"
 project="voicebox_audio"
-experiment = "audio"
 tags = ["audio", "vctk"]
 init_from = "scratch" # or "scratch" or "resume"
-train_batch_size = 16
+train_batch_size = 64
 train_steps = 600000
-loader_workers = 4
+loader_workers = 8
 summary_interval = 100
 save_interval = 10000
-initial_lr = 0.000001
-default_lr = 0.00001
-warmup_steps = 50000
+initial_lr = 1e-5
+default_lr = 1e-4
+warmup_steps = 5000
 device = 'cuda:0'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
-enable_autocast = False
+enable_autocast = True
 enable_compile = False
+enable_detect_anomaly = True
 
 #
 # Precision
@@ -134,6 +137,9 @@ class TextGridDataset(torch.utils.data.Dataset):
         # Reshape audio (C, T) -> (T, C)
         audio = audio.transpose(0, 1)
 
+        # Normalize audio
+        audio = (audio - (-5.8843)) / 2.2615
+
         # Phonemes
         phonemes = []
         for t in range(len(tokens)):
@@ -210,7 +216,6 @@ base_model = AudioModel(tokenizer.n_tokens).to(device)
 model = base_model
 if enable_compile:
     model = torch.compile(base_model)
-    
 
 #
 # Optimizer
@@ -280,15 +285,40 @@ def train_step():
     audio = audio.to(device, non_blocking=True)
     mask = mask.to(device, non_blocking=True)
 
-    # Run predictor
-    optim.zero_grad()
-    predicted, loss = model(tokens, audio, mask, target = audio)
+    # Prepare CFM
+    times = torch.rand((audio.shape[0],), dtype = audio.dtype, device = audio.device)
 
-    # Clip gradients
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+    # Prepare target and noised audio
+    sigma = 0.0 # What to use here?
+    t = rearrange(times, 'b -> b 1 1')
+    noise = torch.randn_like(audio).to(device)
+    w = (1 - (1 - sigma) * t) * noise + t * audio
+    flow = audio - (1 - sigma) * noise
+
+    # # Classifier Free Guidance
+    # cond_drop_mask = prob_mask_like(cond.shape[:1], cond_drop_prob, self.device)
+
+    #         cond = torch.where(
+    #             rearrange(cond_drop_mask, '... -> ... 1 1'),
+    #             self.null_cond,
+    #             cond
+    #         )
+
+    #         cond_ids = torch.where(
+    #             rearrange(cond_drop_mask, '... -> ... 1'),
+    #             self.null_cond_id,
+    #             cond_token_ids
+    #         )
+
+    # Forward 
+    optim.zero_grad()   
+    with torch.autograd.detect_anomaly() if enable_detect_anomaly else nullcontext():
+        with autocast:
+            predicted, loss = model(tokens, audio, w, mask, times=times, target = flow)
 
     # Backprop
     loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
     optim.step()
 
     # Advance
@@ -302,11 +332,12 @@ def train_step():
             "predicted/mean": predicted.mean(),
             "predicted/max": predicted.max(),
             "predicted/min": predicted.min(),
-            "target/mean": audio.mean(),
-            "target/max": audio.max(),
-            "target/min": audio.min(),
+            "target/mean": flow.mean(),
+            "target/max": flow.max(),
+            "target/min": flow.min(),
             "data/length": mask.shape[1],
         }, step=step)
+        print(f'Step {step}: loss={loss}, lr={lr}')
         
     # Save
     if step % save_interval == 0:
@@ -317,5 +348,6 @@ def train_step():
 #
 
 print(f'Training {experiment} on {device} with {dtype} precision')
+print(f'Parameters: {count_parameters(model)}')
 while step < train_steps:
     train_step()

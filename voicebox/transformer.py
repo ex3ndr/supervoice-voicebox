@@ -32,6 +32,9 @@ class Transformer(nn.Module):
         for i in range(n_layers//2):
             self.skip_combiners.append(torch.nn.Linear(n_dim * 2, n_dim))
 
+        # Output normalization
+        self.output_norm = nn.LayerNorm(n_dim, bias=False)
+
 
     def forward(self, x, rotary_embed = None):
         batch, seq_len, *_ = x.shape
@@ -52,6 +55,9 @@ class Transformer(nn.Module):
             # Skip connection
             if i <= self.n_layers // 2:
                 connections.append(x)
+
+        # Output normalization
+        x = self.output_norm(x)
 
         # Result
         return x
@@ -86,7 +92,9 @@ class AttentionBlock(torch.nn.Module):
         self.mlp_output_dropout = nn.Dropout(dropout)
 
     def forward(self, x, rotary_embed = None):
-        residual = x # Save for residual connection
+
+        # Residual
+        residual = x
 
         # Input normalization
         y = self.attention_ln(x)
@@ -97,26 +105,29 @@ class AttentionBlock(torch.nn.Module):
 
         # Rotary embedding
         if rotary_embed is not None:
-            q = apply_rotary_pos_emb(q, rotary_embed)
-            k = apply_rotary_pos_emb(k, rotary_embed)
+            q = apply_rotary_pos_emb(rotary_embed, q)
+            k = apply_rotary_pos_emb(rotary_embed, k)
 
         # Dot product attention
         B, T, C = x.size() # batch size, sequence length, context width
-        y = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout)
+        y = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout if self.training else 0.0)
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_heads * self.n_dim_head) # re-assemble all head outputs side by side
 
         # Output
         y = self.attention_output(y)
         y = self.attention_output_dropout(y)
+
+        # Residual
         y = residual + y
+        residual = y
 
         # MLP
-        residual = y
         y = self.mlp_ln(y)
         y = self.mlp_input(y)
         y = F.gelu(y)
         y = self.mlp_output(y)
-        y = residual + self.mlp_output_dropout(y)
+        y = self.mlp_output_dropout(y)
+        y = residual + y
 
         return y
 

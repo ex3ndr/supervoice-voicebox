@@ -13,4 +13,4 @@ def sample_noisy_value(source, times, sigma):
     w = (1 - (1 - sigma) * t) * noise + t * source
     flow = source - (1 - sigma) * noise
 
-    return flow
+    return w, flow
