@@ -14,7 +14,6 @@ import shutil
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DistributedSampler, DataLoader
-# from torch.utils.tensorboard import SummaryWriter
 import pandas
 import wandb
 
@@ -29,15 +28,15 @@ from train_config import config
 #
 
 project="vocoder"
-experiment = "vocoder_vctk"
-tags = ["vocoder", "vctk"]
+experiment = "vocoder_pre_final"
+tags = ["vocoder", "vctk", "lj", "libritts-r"]
 init_from = "scratch" # or "scratch" or "resume"
 train_batch_size = 16
 train_epochs = 3100
 loader_workers = 4
 summary_interval = 100
 save_interval = 10000
-device = 'cuda:0'
+device = 'cuda:1'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
 enable_autocast = False
 enable_compile = False
@@ -64,14 +63,13 @@ if init_from == "resume":
 # Logger
 #
 
-# writer = SummaryWriter(f'runs/{experiment}')
 wandb.init(project=project, config=config, tags=tags)
 
 #
 # Dataset
 #
 
-train_files = glob("datasets/vctk-prepared/*/*.wav")
+train_files = glob("datasets/vctk-prepared/*/*.wav") + glob("external_datasets/lj-speech-1.1/*/*.wav") + glob("external_datasets/libritts-r-clean-100/*/*.wav") + glob("external_datasets/libritts-r-clean-360/*/*.wav")
 def transformer(audio):
     spec = spectogram(audio, config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
     return spec, audio
@@ -81,7 +79,7 @@ training_dataset = SimpleAudioDataset(train_files,  config.audio.sample_rate, co
 # Loader
 #
 
-train_loader = DataLoader(training_dataset, num_workers=loader_workers,  shuffle=False, batch_size=train_batch_size, pin_memory=True, drop_last=True)
+train_loader = DataLoader(training_dataset, num_workers=loader_workers,  shuffle=True, batch_size=train_batch_size, pin_memory=True, drop_last=True)
 
 #
 # Model
@@ -220,10 +218,6 @@ def train_epoch():
                 "loss/generator_all": loss_gen_all,
                 "loss/generator_mel": loss_mel,
             }, step=step)
-            # writer.add_scalar("loss/mpd", loss_disc_f, step)
-            # writer.add_scalar("loss/msd", loss_disc_s, step)
-            # writer.add_scalar("loss/generator_all", loss_gen_all, step)
-            # writer.add_scalar("loss/generator_mel", loss_mel, step)
         
         # Save
         if step % save_interval == 0:
