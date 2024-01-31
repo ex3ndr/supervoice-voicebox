@@ -31,9 +31,9 @@ from utils.tensors import count_parameters
 # Device and config
 #
 
-experiment = "audio_alibi"
+experiment = "audio_libritts"
 project="voicebox_audio"
-tags = ["audio", "vctk"]
+tags = ["audio", "libritts"]
 init_from = "scratch" # or "scratch" or "resume"
 train_batch_size = 64
 train_steps = 600000
@@ -80,14 +80,16 @@ wandb.init(project=project, config=config, tags=tags)
 print("Loading dataset...")
 
 # Load index
-files = glob("datasets/vctk-aligned/**/*.TextGrid")
-files = [f[len("datasets/vctk-aligned/"):-len(".TextGrid")] for f in files]
+dataset_dir = "datasets/libritts-aligned"
+dataset_audio_dir = "datasets/libritts-prepared"
+files = glob(dataset_dir + "/**/*.TextGrid")
+files = [f[len(dataset_dir + "/"):-len(".TextGrid")] for f in files]
 
 # Load textgrids
-textgrid = [textgrid.TextGrid.fromFile("datasets/vctk-aligned/" + f + ".TextGrid") for f in files]
+textgrid = [textgrid.TextGrid.fromFile(dataset_dir + "/" + f + ".TextGrid") for f in files]
 
 # Load audio
-files = ["datasets/vctk-prepared/" + f + ".pt" for f in files]
+files = [dataset_audio_dir + "/" + f + ".pt" for f in files]
 
 # Tokenizer
 tokenizer = Tokenizer()
