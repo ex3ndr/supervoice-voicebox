@@ -24,18 +24,33 @@ from utils.audio import spectogram
 from train_config import config
 
 #
-# Device and config
+# Project
 #
 
 project="vocoder"
 experiment = "vocoder_pre_final"
 tags = ["vocoder", "vctk", "lj", "libritts-r"]
-init_from = "scratch" # or "scratch" or "resume"
-train_batch_size = 16
-train_epochs = 3100
+init_from = "resume" # or "scratch" or "resume"
 loader_workers = 4
 summary_interval = 100
 save_interval = 10000
+
+#
+# Training parameters
+#
+
+train_segment_size = 8000
+train_learning_rate = 0.0002
+train_adam_b1 = 0.8
+train_adam_b2 = 0.99
+train_lr_decay = 0.999
+train_batch_size = 16
+train_epochs = 3100
+
+#
+# Device and config
+#
+
 device = 'cuda:1'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
 enable_autocast = False
@@ -57,13 +72,12 @@ torch.set_float32_matmul_precision('high')
 checkpoint = None
 if init_from == "resume":
     checkpoint = torch.load(f'./checkpoints/{experiment}.pt')
-    config = checkpoint['config'] # Reload config
 
 #
 # Logger
 #
 
-wandb.init(project=project, config=config, tags=tags)
+wandb.init(project=project, tags=tags)
 
 #
 # Dataset
@@ -102,10 +116,10 @@ if enable_compile:
 # Optimizer
 #
 
-optim_g = torch.optim.AdamW(generator.parameters(), config.vocoder.training.learning_rate, betas=[config.vocoder.training.adam_b1, config.vocoder.training.adam_b2])
-optim_d = torch.optim.AdamW(itertools.chain(msd.parameters(), mpd.parameters()), config.vocoder.training.learning_rate, betas=[config.vocoder.training.adam_b1, config.vocoder.training.adam_b2])
-scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=config.vocoder.training.lr_decay, last_epoch=epoch)
-scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=config.vocoder.training.lr_decay, last_epoch=epoch)
+optim_g = torch.optim.AdamW(generator.parameters(), train_learning_rate, betas=[train_adam_b1, train_adam_b2])
+optim_d = torch.optim.AdamW(itertools.chain(msd.parameters(), mpd.parameters()), train_learning_rate, betas=[train_adam_b1, train_adam_b2])
+scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=train_lr_decay, last_epoch=epoch)
+scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=train_lr_decay, last_epoch=epoch)
 
 #
 # Save/Load
@@ -126,7 +140,7 @@ def save():
          'scheduler_g': scheduler_g.state_dict(),
          'scheduler_d': scheduler_d.state_dict(),
          'epoch': epoch, 
-         'step': step 
+         'step': step
 
     },  f'./checkpoints/{experiment}.pt')
     shutil.copyfile(f'./checkpoints/{experiment}.pt', f'./checkpoints/{experiment}_step_{step}.pt')
@@ -215,6 +229,10 @@ def train_epoch():
             wandb.log({
                 "loss/mpd": loss_disc_f,
                 "loss/msd": loss_disc_s,
+                "loss/fm_s": loss_fm_s,
+                "loss/fm_f": loss_fm_f,
+                "loss/generator_s": loss_gen_s,
+                "loss/generator_f": loss_gen_f,
                 "loss/generator_all": loss_gen_all,
                 "loss/generator_mel": loss_mel,
             }, step=step)

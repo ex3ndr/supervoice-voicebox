@@ -12,6 +12,7 @@ from contextlib import nullcontext
 import shutil
 import math
 import random
+from tqdm import tqdm
 
 # ML
 import torch
@@ -33,8 +34,8 @@ from utils.tensors import count_parameters
 
 experiment = "audio_libritts"
 project="voicebox_audio"
-tags = ["audio", "libritts"]
-init_from = "scratch" # or "scratch" or "resume"
+tags = ["audio", "vctk", "libritts"]
+init_from = "resume" # or "scratch" or "resume"
 train_batch_size = 64
 train_steps = 600000
 loader_workers = 8
@@ -65,7 +66,6 @@ torch.set_float32_matmul_precision('high')
 checkpoint = None
 if init_from == "resume":
     checkpoint = torch.load(f'./checkpoints/{experiment}.pt')
-    config = checkpoint['config'] # Reload config
 
 #
 # Logger
@@ -80,19 +80,33 @@ wandb.init(project=project, config=config, tags=tags)
 print("Loading dataset...")
 
 # Load index
-dataset_dir = "datasets/libritts-aligned"
-dataset_audio_dir = "datasets/libritts-prepared"
-files = glob(dataset_dir + "/**/*.TextGrid")
-files = [f[len(dataset_dir + "/"):-len(".TextGrid")] for f in files]
 
-# Load textgrids
-textgrid = [textgrid.TextGrid.fromFile(dataset_dir + "/" + f + ".TextGrid") for f in files]
+def load_dataset(name):
+    dataset_dir = "datasets/" + name + "-aligned"
+    dataset_audio_dir = "datasets/" + name + "-prepared"
+    files = glob(dataset_dir + "/**/*.TextGrid")
+    files = [f[len(dataset_dir + "/"):-len(".TextGrid")] for f in files]
 
-# Load audio
-files = [dataset_audio_dir + "/" + f + ".pt" for f in files]
+    # Load textgrids
+    tg = [textgrid.TextGrid.fromFile(dataset_dir + "/" + f + ".TextGrid") for f in tqdm(files)]
+
+    # Load audio
+    files = [dataset_audio_dir + "/" + f + ".pt" for f in files]    
+
+    return tg, files
+
+files = []
+tg = []
+for name in ["libritts", "vctk"]:
+    t, f = load_dataset(name)
+    files += f
+    tg += t
+
+# Sort two lists by length together
+tg, files = zip(*sorted(zip(tg, files), key=lambda x: len(x[0].maxTime)))
 
 # Tokenizer
-tokenizer = Tokenizer()
+tokenizer = Tokenizer(config)
 
 # Data extractor
 def extract_textgrid(src):
@@ -140,7 +154,7 @@ class TextGridDataset(torch.utils.data.Dataset):
         audio = audio.transpose(0, 1)
 
         # Normalize audio
-        audio = (audio - (-5.8843)) / 2.2615
+        audio = (audio - config.audio.norm_mean) / config.audio.norm_std
 
         # Phonemes
         phonemes = []
@@ -149,6 +163,9 @@ class TextGridDataset(torch.utils.data.Dataset):
             for i in range(durations[t]):
                 phonemes.append(tok)
         phonemes = tokenizer(phonemes)
+
+        # Cut Audio
+        audio = audio[:len(phonemes)]
 
         # Mask
         if random.uniform(0, 1) < 0.3: # If need to mask
@@ -168,9 +185,6 @@ class TextGridDataset(torch.utils.data.Dataset):
         else:
             mask = torch.ones(len(phonemes)).bool()
 
-        # Cut Audio
-        audio = audio[:len(phonemes)]
-
         # Outputs
         return phonemes, audio, mask
 
@@ -178,7 +192,7 @@ class TextGridDataset(torch.utils.data.Dataset):
 # Dataset
 #
 
-training_dataset = TextGridDataset(textgrid, files)
+training_dataset = TextGridDataset(tg, files)
 
 #
 # Loader
@@ -231,7 +245,6 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = train_step
 #
 
 def save():
-    global epoch
     torch.save({
 
         # Model
@@ -255,7 +268,7 @@ if checkpoint is not None:
     scheduler.load_state_dict(checkpoint['scheduler'])
     step = checkpoint['step']
 
-    print(f'Loaded at #{epoch}/{step}')
+    print(f'Loaded at #{step}')
 
 #
 # Training
@@ -288,13 +301,11 @@ def train_step():
     mask = mask.to(device, non_blocking=True)
 
     # Prepare CFM
-    times = torch.rand((audio.shape[0],), dtype = audio.dtype, device = audio.device)
-
-    # Prepare target and noised audio
+    times = torch.rand((audio.shape[0],), dtype = audio.dtype, device = device)
     sigma = 0.0 # What to use here?
     t = rearrange(times, 'b -> b 1 1')
-    noise = torch.randn_like(audio).to(device)
-    w = (1 - (1 - sigma) * t) * noise + t * audio
+    noise = torch.randn_like(audio, device=device)
+    audio_noizy = (1 - (1 - sigma) * t) * noise + t * audio
     flow = audio - (1 - sigma) * noise
 
     # # Classifier Free Guidance
@@ -316,7 +327,14 @@ def train_step():
     optim.zero_grad()   
     with torch.autograd.detect_anomaly() if enable_detect_anomaly else nullcontext():
         with autocast:
-            predicted, loss = model(tokens, audio, w, mask, times=times, target = flow)
+            predicted, loss = model(
+                tokens = tokens, 
+                audio = audio, 
+                audio_noizy = audio_noizy, 
+                mask = mask, 
+                times = times, 
+                target = flow
+            )
 
     # Backprop
     loss.backward()

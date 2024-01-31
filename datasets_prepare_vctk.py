@@ -12,7 +12,7 @@ import torchaudio
 from pathlib import Path
 from tqdm import tqdm
 from utils.dataset import load_common_voice_files
-from utils.audio import load_mono_audio, spectogram
+from utils.audio import load_mono_audio, spectogram, trim_silence
 from train_config import config
 import torchaudio
 import os
@@ -38,7 +38,10 @@ def execute_parallel(args):
     target_name = str(index).zfill(8)
 
     # Load audio
-    waveform = load_mono_audio(file, 16000, device="cuda:1")
+    waveform = load_mono_audio(file, 16000, device="cuda")
+
+    # Trim silence
+    waveform = trim_silence(waveform, 16000)
 
     # Spectogram
     spec = spectogram(waveform, config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
@@ -47,7 +50,7 @@ def execute_parallel(args):
     target_dir = os.path.join("datasets", "vctk-prepared", speaker_directory(speaker))
     torchaudio.save(os.path.join(target_dir, target_name + ".wav"), waveform.unsqueeze(0).cpu(), 16000)
     torch.save(spec.cpu(), os.path.join(target_dir, target_name + ".pt"))
-    with open(os.path.join(target_dir, target_name + ".txt"), "w") as f:
+    with open(os.path.join(target_dir, target_name + ".txt"), "w", encoding="utf-8") as f:
         f.write(text)
     
 

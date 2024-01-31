@@ -80,7 +80,7 @@ files = glob("datasets/vctk-aligned/**/*.TextGrid")
 files = [textgrid.TextGrid.fromFile(f) for f in files]
 
 # Tokenizer
-tokenizer = Tokenizer()
+tokenizer = Tokenizer(config)
 
 # Data extractor
 def extract_data(src):
@@ -108,12 +108,6 @@ def extract_data(src):
         # Apply
         output_tokens.append(tok)
         output_durations.append(duration)
-
-    # Trim start and end silence
-    if output_tokens[0] == 'SIL' and output_durations[0] > 1:
-        output_durations[0] = 1
-    if output_tokens[len(output_tokens) - 1] == 'SIL' and output_durations[len(output_durations) - 1] > 1:
-        output_durations[len(output_durations) - 1] = 1
 
     # Outputs
     return output_tokens, output_durations
@@ -206,7 +200,6 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = train_step
 #
 
 def save():
-    global epoch
     torch.save({
 
         # Model
@@ -230,7 +223,7 @@ if checkpoint is not None:
     scheduler.load_state_dict(checkpoint['scheduler'])
     step = checkpoint['step']
 
-    print(f'Loaded at #{epoch}/{step}')
+    print(f'Loaded at #{step}')
 
 #
 # Training

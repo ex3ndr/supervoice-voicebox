@@ -5,85 +5,83 @@ from .transformer import Transformer, ConvPositionEmbed
 from einops import rearrange, reduce, repeat
 from torchdiffeq import odeint
 
-class AudioModel(torch.nn.Module):
-    def __init__(self, n_tokens):
-        super(AudioModel, self).__init__()
-        self.n_tokens = n_tokens
-
-        # Architecture
-        n_dim_head = 64
+class AudioPredictor(torch.nn.Module):
+    def __init__(self, config):
+        super(AudioPredictor, self).__init__()
+        self.n_tokens = len(config.tokenizer.tokens)
+        self.config = config.audio_predictor
 
         # Token embedding
-        self.token_embedding = torch.nn.Embedding(n_tokens, 1024)
+        self.token_embedding = torch.nn.Embedding(self.n_tokens, self.config.n_embeddings)
 
         # Convolutional positional encoder
-        self.conv_embed = ConvPositionEmbed(n_dim = 1024, kernel_size = 31)
+        self.conv_embed = ConvPositionEmbed(n_dim = self.config.n_embeddings, kernel_size = 31)
 
         # Sinusoidal positional embedding for time
-        self.sinu_pos_emb = LearnedSinusoidalPosEmb(1024)
+        self.sinu_pos_emb = LearnedSinusoidalPosEmb(self.config.n_embeddings)
 
         # Transformer input
-        self.transformer_input = torch.nn.Linear(1024 + 80 + 80, 1024)
+        self.transformer_input = torch.nn.Linear(self.config.n_embeddings + 2 * config.audio.n_mels, 1024)
 
         # Transformer
         self.transformer = Transformer(
-            n_heads = 16,
-            n_layers = 12,
-            n_dim = 1024,
-            n_dim_head = n_dim_head,
-            n_dim_ffn = 4096,
+            n_heads = self.config.n_heads,
+            n_layers = self.config.n_layers,
+            n_dim = self.config.n_dim,
+            n_dim_head = self.config.n_dim_head,
+            n_dim_ffn = self.config.n_dim_ffn,
             n_non_bias_tokens = 1, # Exclude time embedding from attention bias
             dropout = 0.1
         )
 
         # Prediction
-        self.prediction = torch.nn.Linear(1024, 80)
+        self.prediction = torch.nn.Linear(self.config.n_dim, config.audio.n_mels)
 
-    def sample(self, x, y, mask, steps):
+    def sample(self, *, tokens, audio, mask, steps):
         
         #
         # Prepare
         #
 
         # Mask out y
-        y_masked = y.masked_fill(mask.unsqueeze(-1), 0.0) # Mask need to be reshaped: (B, T) -> (B, T, 1)
+        audio_masked = audio.masked_fill(mask.unsqueeze(-1), 0.0) # Mask need to be reshaped: (B, T) -> (B, T, 1)
 
         # Create noise
-        noise = torch.randn_like(y).to(x.device)
+        noise = torch.randn_like(audio_masked).to(audio_masked.device)
 
         # Create time interpolation
-        times = torch.linspace(0, 1, steps, device = x.device)
+        times = torch.linspace(0, 1, steps, device = audio_masked.device)
 
         # Solver
         def solver(t, z):
-            return self.forward(x.unsqueeze(0), y.unsqueeze(0), z.unsqueeze(0), mask.unsqueeze(0), times = t.unsqueeze(0)).squeeze(0)
+            return self.forward(tokens.unsqueeze(0), audio_masked.unsqueeze(0), z.unsqueeze(0), mask.unsqueeze(0), times = t.unsqueeze(0)).squeeze(0)
         trajectory = odeint(solver, noise, times, atol = 1e-5, rtol = 1e-5, method = 'midpoint')
 
         # Output sample and full trajectory
         return trajectory[-1], trajectory
 
-    def forward(self, x, y, z, mask, times, target = None):
+    def forward(self, *, tokens, audio, audio_noizy, mask, times, target = None):
         
         #
         # Prepare
         #
 
         # Check shapes
-        assert x.shape[0] == y.shape[0] == z.shape[0] == mask.shape[0] # Batch
-        assert x.shape[1] == y.shape[1] == z.shape[1] == mask.shape[1] # Sequence length
+        assert tokens.shape[0] == audio.shape[0] == audio_noizy.shape[0] == mask.shape[0] # Batch
+        assert tokens.shape[1] == audio.shape[1] == audio_noizy.shape[1] == mask.shape[1] # Sequence length
 
-        # Mask out y
-        y_masked = y.masked_fill(mask.unsqueeze(-1), 0.0) # Mask need to be reshaped: (B, T) -> (B, T, 1)
+        # Mask out audio
+        audio_masked = audio.masked_fill(mask.unsqueeze(-1), 0.0) # Mask need to be reshaped: (B, T) -> (B, T, 1)
 
         #
         # Compute
         #
 
         # Convert phonemes to embeddings
-        x = self.token_embedding(x)
+        tokens_embed = self.token_embedding(tokens)
 
         # Combine phoneme embeddings, masked audio and noizy audio
-        output = torch.cat([x, y_masked, z], dim = -1)
+        output = torch.cat([tokens_embed, audio_masked, audio_noizy], dim = -1)
 
         # Apply transformer input layer
         output = self.transformer_input(output)

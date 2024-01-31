@@ -29,9 +29,9 @@ def plot_waveform(waveform, sample_rate=16000, title="Waveform", xlim=(0,5)):
             axes[c].set_xlim(xlim)
     figure.suptitle(title)
 
-def plot_specgram(spectrogram, title="Spectrogram", xlim=(0,5)):
+def plot_specgram(spectrogram, title="Spectrogram"):
     _, axis = plt.subplots(1, 1)
-    axis.imshow(spectrogram, cmap="viridis", vmin=-60, vmax=0, origin="lower", aspect="auto")
+    axis.imshow(spectrogram, cmap="viridis", vmin=-10, vmax=0, origin="lower", aspect="auto")
     axis.set_title(title)
     plt.tight_layout()
 

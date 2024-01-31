@@ -3,80 +3,81 @@ import torch.nn.functional as F
 from .transformer import Transformer, ConvPositionEmbed
 
 class DurationPredictor(torch.nn.Module):
-    def __init__(self, n_tokens):
+    def __init__(self, config):
         super(DurationPredictor, self).__init__()
+        self.config = config.duration_predictor
+        self.n_tokens = len(config.tokenizer.tokens)
         
         # Embedding
-        self.token_embedding = torch.nn.Embedding(n_tokens, 512)
+        self.token_embedding = torch.nn.Embedding(self.m_tokens, self.config.n_embeddings)
 
         # Convolutional positional encoder
-        self.conv_embed = ConvPositionEmbed(n_dim = 512, kernel_size = 31)
+        self.conv_embed = ConvPositionEmbed(n_dim = self.config.n_embeddings, kernel_size = 31)
 
         # Transformer input
-        self.transformer_input = torch.nn.Linear(512 + 1, 512)
+        self.transformer_input = torch.nn.Linear(self.config.n_embeddings + 1, self.config.n_dim)
         
         # Transformer
         self.transformer = Transformer(
-            n_heads = 8,
-            n_layers = 8,
-            n_dim = 512,
-            n_dim_head = 512, # ??
-            n_dim_ffn = 2048,
-            dropout = 0.1
+            n_heads = self.config.n_heads,
+            n_layers = self.config.n_layers,
+            n_dim = self.config.n_dim,
+            n_dim_head = self.config.n_dim_head,
+            n_dim_ffn = self.config.n_dim_ffn
         )
 
         # Prediction
-        self.prediction = torch.nn.Linear(512, 1)
+        self.prediction = torch.nn.Linear(self.config.n_dim, 1)
 
-    def forward(self, x, y, mask, target = None):
+    def forward(self, *, tokens, durations, mask, target = None):
 
         #
         # Prepare
         #
 
         # Check shapes
-        assert x.shape[0] == y.shape[0] == mask.shape[0] # Batch
-        assert x.shape[1] == y.shape[1] == mask.shape[1] # Sequence length
+        assert tokens.shape[0] == durations.shape[0] == mask.shape[0] # Batch
+        assert tokens.shape[1] == durations.shape[1] == mask.shape[1] # Sequence length
 
         # Reshape inputs
         mask = mask.unsqueeze(-1) # (B, T) -> (B, T, 1)
-        y = y.unsqueeze(-1) # (B, T) -> (B, T, 1)
+        durations = durations.unsqueeze(-1) # (B, T) -> (B, T, 1)
 
         # Convert durations to log durations
-        y = torch.log(y.float() + 1)
+        durations = torch.log(durations.float() + 1)
 
         # Mask out y
-        y_masked = y.masked_fill(mask, 0.0)
+        durations_masked = durations.masked_fill(mask, 0.0)
 
         #
         # Compute
         #
 
         # Convert phonemes to embeddings
-        x = self.token_embedding(x)
+        tokens_embeddings = self.token_embedding(tokens)
 
         # Combine duration and phoneme embeddings
-        z = torch.cat([y_masked, x], dim = -1)
+        output = torch.cat([durations_masked, tokens_embeddings], dim = -1)
 
         # Apply transformer input layer
-        z = self.transformer_input(z)
+        output = self.transformer_input(output)
 
         # Apply convolutional positional encoder
-        z = self.conv_embed(z) + z
+        output = self.conv_embed(output) + output
 
         # Run through transformer
-        z = self.transformer(z)
+        output = self.transformer(output)
 
         # Predict durations
-        z = self.prediction(z)
+        output_log = self.prediction(output)
 
         #
         # Output
         #
 
         # Convert predicted log durations back to durations
-        predictions = torch.clamp(z.exp() - 1, min=0).long()
-        predictions = predictions.squeeze(-1) # (B, T, 1) -> (B, T)
+        output = torch.clamp(output_log.exp() - 1, min=0).long()
+        output = output.squeeze(-1) # (B, T, 1) -> (B, T)
 
         #
         # Loss
@@ -91,7 +92,7 @@ class DurationPredictor(torch.nn.Module):
             target = target.unsqueeze(-1)
 
             # Compute l1 loss
-            loss = F.l1_loss(z, target, reduction = 'none')
+            loss = F.l1_loss(output_log, target, reduction = 'none')
 
             # Zero non-masked values
             loss = loss.masked_fill(~mask, 0.)
@@ -105,6 +106,6 @@ class DurationPredictor(torch.nn.Module):
             # Expectation over loss of batch
             loss = loss.mean()
 
-            return predictions, z, target, loss
+            return output, loss
         else:
-            return predictions, z
+            return output
