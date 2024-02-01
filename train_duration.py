@@ -46,8 +46,8 @@ warmup_steps = 50000
 device = 'cuda:0'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
 enable_autocast = False
-enable_compile = False
-enable_detect_anomaly = True
+enable_compile = True
+enable_detect_anomaly = False
 
 #
 # Precision
@@ -178,7 +178,7 @@ def collate_to_shortest(batch):
             ))
     return torch.stack([b[0] for b in padded]), torch.stack([b[1] for b in padded]), torch.stack([b[2] for b in padded])
 
-train_loader = DataLoader(training_dataset, num_workers=loader_workers, shuffle=True, batch_size=train_batch_size, pin_memory=True, collate_fn=collate_to_shortest)
+train_loader = DataLoader(training_dataset, num_workers=loader_workers, shuffle=False, batch_size=train_batch_size, pin_memory=True, collate_fn=collate_to_shortest)
 
 #
 # Model
@@ -307,6 +307,10 @@ def train_step():
             )
         predicted = predicted.float()
         durations = durations.float()
+
+        # Check if loss is nan
+        if torch.isnan(loss):
+            raise RuntimeError("Loss is NaN")
 
         # Backprop
         optim.zero_grad()

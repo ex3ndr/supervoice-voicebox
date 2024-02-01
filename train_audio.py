@@ -32,8 +32,8 @@ from utils.tensors import count_parameters, probability_binary_mask
 # Device and config
 #
 
-experiment = "audio_libritts"
-project="audio_pre"
+experiment = "audio_pre"
+project="voicebox_audio"
 tags = ["audio", "vctk", "libritts"]
 init_from = "scratch" # or "scratch" or "resume"
 train_batch_size = 64
@@ -47,8 +47,8 @@ warmup_steps = 5000
 device = 'cuda:1'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
 enable_autocast = False
-enable_compile = False
-enable_detect_anomaly = True
+enable_compile = True
+enable_detect_anomaly = False
 
 #
 # Precision
@@ -359,6 +359,10 @@ def train_step():
                 times = times, 
                 target = flow
             )
+
+        # Check if loss is nan
+        if torch.isnan(loss):
+            raise RuntimeError("Loss is NaN")
 
         # Backprop
         optim.zero_grad()   
