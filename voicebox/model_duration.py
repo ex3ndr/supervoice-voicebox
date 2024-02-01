@@ -9,7 +9,7 @@ class DurationPredictor(torch.nn.Module):
         self.n_tokens = len(config.tokenizer.tokens)
         
         # Embedding
-        self.token_embedding = torch.nn.Embedding(self.m_tokens, self.config.n_embeddings)
+        self.token_embedding = torch.nn.Embedding(self.n_tokens, self.config.n_embeddings)
 
         # Convolutional positional encoder
         self.conv_embed = ConvPositionEmbed(n_dim = self.config.n_embeddings, kernel_size = 31)
@@ -23,7 +23,9 @@ class DurationPredictor(torch.nn.Module):
             n_layers = self.config.n_layers,
             n_dim = self.config.n_dim,
             n_dim_head = self.config.n_dim_head,
-            n_dim_ffn = self.config.n_dim_ffn
+            n_dim_ffn = self.config.n_dim_ffn,
+            n_non_bias_tokens = 0,
+            dropout = 0.1
         )
 
         # Prediction
@@ -98,7 +100,8 @@ class DurationPredictor(torch.nn.Module):
             loss = loss.masked_fill(~mask, 0.)
 
             # Number of masked frames
-            n_masked_frames = mask.sum(dim = -1).clamp(min = 1e-5)
+            # n_masked_frames = mask.sum(dim = -1).clamp(min = 1e-5)
+            n_masked_frames = mask.sum(dim = -1).clamp(min = 1)
 
             # Mean loss of expectation over masked loss
             loss = loss.sum(dim = -1) / n_masked_frames

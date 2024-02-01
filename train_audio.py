@@ -1,6 +1,6 @@
 # Ignore warnings
-import warnings
-warnings.filterwarnings("ignore")
+# import warnings
+# warnings.filterwarnings("ignore")
 
 # Base
 import itertools
@@ -24,18 +24,18 @@ from einops import rearrange, reduce, repeat
 
 # Local
 from train_config import config
-from voicebox.model_audio import AudioModel
+from voicebox.model_audio import AudioPredictor
 from voicebox.tokenizer import Tokenizer
-from utils.tensors import count_parameters
+from utils.tensors import count_parameters, probability_binary_mask
 
 #
 # Device and config
 #
 
 experiment = "audio_libritts"
-project="voicebox_audio"
+project="audio_pre"
 tags = ["audio", "vctk", "libritts"]
-init_from = "resume" # or "scratch" or "resume"
+init_from = "scratch" # or "scratch" or "resume"
 train_batch_size = 64
 train_steps = 600000
 loader_workers = 8
@@ -44,9 +44,9 @@ save_interval = 10000
 initial_lr = 1e-5
 default_lr = 1e-4
 warmup_steps = 5000
-device = 'cuda:0'
+device = 'cuda:1'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
-enable_autocast = True
+enable_autocast = False
 enable_compile = False
 enable_detect_anomaly = True
 
@@ -103,7 +103,7 @@ for name in ["libritts", "vctk"]:
     tg += t
 
 # Sort two lists by length together
-tg, files = zip(*sorted(zip(tg, files), key=lambda x: len(x[0].maxTime)))
+tg, files = zip(*sorted(zip(tg, files), key=lambda x: x[0].maxTime))
 
 # Tokenizer
 tokenizer = Tokenizer(config)
@@ -228,16 +228,36 @@ train_loader = DataLoader(training_dataset, num_workers=loader_workers, shuffle=
 #
 
 step = 0
-base_model = AudioModel(tokenizer.n_tokens).to(device)
+base_model = AudioPredictor(config).to(device)
 model = base_model
 if enable_compile:
     model = torch.compile(base_model)
+
+if enable_detect_anomaly:
+    def nan_hook(self, inp, output):
+        if not isinstance(output, tuple):
+            outputs = [output]
+        else:
+            outputs = output
+
+        for i, out in enumerate(outputs):
+            nan_mask = torch.isnan(out)
+            if nan_mask.any():
+                print("In", self.__class__.__name__)
+                raise RuntimeError(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", out[nan_mask.nonzero()[:, 0].unique(sorted=True)])
+
+    for name, submodule in model.named_modules():
+        submodule.register_forward_hook(nan_hook)
 
 #
 # Optimizer
 #
 
-optim = torch.optim.AdamW(base_model.parameters(), initial_lr, betas=[0.8, 0.99])
+wd_params, no_wd_params = [], []
+for param in base_model.parameters():
+    param_list = no_wd_params if param.ndim < 2 else wd_params
+    param_list.append(param)
+optim = torch.optim.AdamW([{'params': wd_params}, {'params': no_wd_params, 'weight_decay': 0}], initial_lr, betas=[0.9, 0.99],weight_decay=0.01)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = train_steps)
 
 #
@@ -308,24 +328,28 @@ def train_step():
     audio_noizy = (1 - (1 - sigma) * t) * noise + t * audio
     flow = audio - (1 - sigma) * noise
 
-    # # Classifier Free Guidance
-    # cond_drop_mask = prob_mask_like(cond.shape[:1], cond_drop_prob, self.device)
+    # Drop tokens and audio completely
+    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
+    audio = torch.where(
+        rearrange(conditional_drop_mask, '... -> ... 1 1'),
+        torch.zeros_like(audio, dtype = tokens.dtype, device = device),
+        audio
+    )
+    tokens = torch.where(
+        rearrange(conditional_drop_mask, '... -> ... 1'),
+        torch.full(tokens.shape, tokenizer.unknown_token_id, dtype = tokens.dtype, device = device),
+        tokens
+    )
+    mask = torch.where(
+        rearrange(conditional_drop_mask, '... -> ... 1'),
+        torch.ones_like(mask), # Make mask all ones if we drop
+        mask
+    )
 
-    #         cond = torch.where(
-    #             rearrange(cond_drop_mask, '... -> ... 1 1'),
-    #             self.null_cond,
-    #             cond
-    #         )
-
-    #         cond_ids = torch.where(
-    #             rearrange(cond_drop_mask, '... -> ... 1'),
-    #             self.null_cond_id,
-    #             cond_token_ids
-    #         )
-
-    # Forward 
-    optim.zero_grad()   
+    # Train step
     with torch.autograd.detect_anomaly() if enable_detect_anomaly else nullcontext():
+
+        # Forward
         with autocast:
             predicted, loss = model(
                 tokens = tokens, 
@@ -336,10 +360,11 @@ def train_step():
                 target = flow
             )
 
-    # Backprop
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
-    optim.step()
+        # Backprop
+        optim.zero_grad()   
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
+        optim.step()
 
     # Advance
     step = step + 1

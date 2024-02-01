@@ -3,6 +3,7 @@ from .model_audio import AudioPredictor
 from .model_duration import DurationPredictor
 from .tokenizer import Tokenizer
 from ..vocoder.model import Generator
+from phonemizer.backend import EspeakBackend
 
 class VoiceBox(torch.nn.Module):
     def __init__(self, config):
@@ -19,3 +20,13 @@ class VoiceBox(torch.nn.Module):
 
         # Create vocoder
         self.vocoder = Generator(config)
+
+        # Create phonemizer
+        self.phonemizer = EspeakBackend('en-us')
+
+    def tts(self, text):
+
+        # Phonemize
+        phonemized = self.phonemizer.phonemize(phone='|', word=' ')
+        words = phonemized.split(' ')
+        pass

@@ -19,32 +19,35 @@ import torch.nn.functional as F
 from torch.utils.data import DistributedSampler, DataLoader
 import pandas
 import wandb
+from einops import rearrange, reduce, repeat
 
 # Local
 from train_config import config
 from voicebox.model_duration import DurationPredictor
 from voicebox.tokenizer import Tokenizer
+from utils.tensors import count_parameters, probability_binary_mask
 
 #
 # Device and config
 #
 
 project="duration"
-experiment = "duration_vctk_long"
-tags = ["duration", "vctk"]
-init_from = "scratch" # or "scratch" or "resume"
+experiment = "duration_pre"
+tags = ["duration", "vctk", "libritts"]
+init_from = "resume" # or "scratch" or "resume"
 train_batch_size = 64
 train_steps = 600000
 loader_workers = 4
 summary_interval = 100
 save_interval = 10000
-initial_lr = 0.000001
-default_lr = 0.00001
+initial_lr = 1e-6
+default_lr = 1e-4
 warmup_steps = 50000
 device = 'cuda:0'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
 enable_autocast = False
 enable_compile = False
+enable_detect_anomaly = True
 
 #
 # Precision
@@ -62,7 +65,6 @@ torch.set_float32_matmul_precision('high')
 checkpoint = None
 if init_from == "resume":
     checkpoint = torch.load(f'./checkpoints/{experiment}.pt')
-    config = checkpoint['config'] # Reload config
 
 #
 # Logger
@@ -76,8 +78,9 @@ wandb.init(project=project, config=config, tags=tags)
 #
 
 print("Loading dataset...")
-files = glob("datasets/vctk-aligned/**/*.TextGrid")
-files = [textgrid.TextGrid.fromFile(f) for f in files]
+files = glob("datasets/vctk-aligned/**/*.TextGrid") + glob("datasets/libritts-aligned/**/*.TextGrid")
+# files = glob("datasets/vctk-aligned/**/*.TextGrid")[0:1000]
+files = [textgrid.TextGrid.fromFile(f) for f in tqdm(files)]
 
 # Tokenizer
 tokenizer = Tokenizer(config)
@@ -182,17 +185,36 @@ train_loader = DataLoader(training_dataset, num_workers=loader_workers, shuffle=
 #
 
 step = 0
-base_model = DurationPredictor(tokenizer.n_tokens).to(device)
+base_model = DurationPredictor(config).to(device)
 model = base_model
 if enable_compile:
     model = torch.compile(base_model)
     
+if enable_detect_anomaly:
+    def nan_hook(self, inp, output):
+        if not isinstance(output, tuple):
+            outputs = [output]
+        else:
+            outputs = output
+
+        for i, out in enumerate(outputs):
+            nan_mask = torch.isnan(out)
+            if nan_mask.any():
+                print("In", self.__class__.__name__)
+                raise RuntimeError(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", out[nan_mask.nonzero()[:, 0].unique(sorted=True)])
+
+    for name, submodule in model.named_modules():
+        submodule.register_forward_hook(nan_hook)
 
 #
 # Optimizer
 #
 
-optim = torch.optim.AdamW(base_model.parameters(), initial_lr, betas=[0.8, 0.99])
+wd_params, no_wd_params = [], []
+for param in base_model.parameters():
+    param_list = no_wd_params if param.ndim < 2 else wd_params
+    param_list.append(param)
+optim = torch.optim.AdamW([{'params': wd_params}, {'params': no_wd_params, 'weight_decay': 0}], initial_lr, betas=[0.9, 0.99],weight_decay=0.01)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = train_steps)
 
 #
@@ -255,18 +277,42 @@ def train_step():
     durations = durations.to(device, non_blocking=True)
     mask = mask.to(device, non_blocking=True)
 
-    # Run predictor
-    optim.zero_grad()
-    predicted, z, target, loss = model(tokens, durations, mask, target = durations)
-    predicted = predicted.float()
-    target = target.float()
+    # Mask all for small sequences
+    if tokens.shape[1] < 5:
+        mask = torch.ones_like(mask).bool()
+    else:
+        # Mask everything completely sometimes
+        conditional_drop_mask = probability_binary_mask(shape = (durations.shape[0],), true_prob = 0.3, device = device)
+        durations = torch.where(
+            rearrange(conditional_drop_mask, '... -> ... 1'),
+            torch.zeros_like(durations),
+            durations
+        )
+        mask = torch.where(
+            rearrange(conditional_drop_mask, '... -> ... 1'),
+            torch.zeros_like(mask),
+            mask
+        )
 
-    # Clip gradients
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+    # Train step
+    with torch.autograd.detect_anomaly() if enable_detect_anomaly else nullcontext():
 
-    # Backprop
-    loss.backward()
-    optim.step()
+        # Forward
+        with autocast:
+            predicted, loss = model(
+                tokens = tokens, 
+                durations = durations, 
+                mask = mask, 
+                target = durations
+            )
+        predicted = predicted.float()
+        durations = durations.float()
+
+        # Backprop
+        optim.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
+        optim.step()
 
     # Advance
     step = step + 1
@@ -276,17 +322,15 @@ def train_step():
         wandb.log({
             "learning_rate": lr,
             "loss": loss,
-            "z/mean": z.mean(),
-            "z/max": z.max(),
-            "z/min": z.min(),
             "predicted/mean": predicted.mean(),
             "predicted/max": predicted.max(),
             "predicted/min": predicted.min(),
-            "target/mean": target.mean(),
-            "target/max": target.max(),
-            "target/min": target.min(),
+            "target/mean": durations.mean(),
+            "target/max": durations.max(),
+            "target/min": durations.min(),
             "data/length": mask.shape[1],
         }, step=step)
+        print(f'Step {step} | Loss: {loss} | LR: {lr}')
         
     # Save
     if step % save_interval == 0:

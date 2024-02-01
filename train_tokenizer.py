@@ -3,8 +3,7 @@ from tqdm import tqdm
 import textgrid
 
 # Load files
-dataset_dir = "datasets/libritts-aligned"
-files = glob(dataset_dir + "/**/*.TextGrid")
+files = glob("datasets/libritts-aligned/**/*.TextGrid") + glob("datasets/vctk-aligned/**/*.TextGrid")
 
 # Load textgrids
 tg = [textgrid.TextGrid.fromFile(f) for f in tqdm(files)]
@@ -20,6 +19,6 @@ for f in tqdm(tg):
 
 # Prepare array
 tokens.sort()
-tokens = ["SIL"] + tokens
+tokens = ["<UNK>", "<SIL>"] + tokens
 
 print(tokens)

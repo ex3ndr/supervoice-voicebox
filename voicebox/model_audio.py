@@ -4,6 +4,7 @@ import math
 from .transformer import Transformer, ConvPositionEmbed
 from einops import rearrange, reduce, repeat
 from torchdiffeq import odeint
+from .debug import debug_if_invalid
 
 class AudioPredictor(torch.nn.Module):
     def __init__(self, config):
@@ -14,14 +15,14 @@ class AudioPredictor(torch.nn.Module):
         # Token embedding
         self.token_embedding = torch.nn.Embedding(self.n_tokens, self.config.n_embeddings)
 
-        # Convolutional positional encoder
-        self.conv_embed = ConvPositionEmbed(n_dim = self.config.n_embeddings, kernel_size = 31)
+        # Transformer input
+        self.transformer_input = torch.nn.Linear(self.config.n_embeddings + 2 * config.audio.n_mels, self.config.n_dim)
 
         # Sinusoidal positional embedding for time
-        self.sinu_pos_emb = LearnedSinusoidalPosEmb(self.config.n_embeddings)
+        self.sinu_pos_emb = LearnedSinusoidalPosEmb(self.config.n_dim)
 
-        # Transformer input
-        self.transformer_input = torch.nn.Linear(self.config.n_embeddings + 2 * config.audio.n_mels, 1024)
+        # Convolutional positional encoder
+        self.conv_embed = ConvPositionEmbed(n_dim = self.config.n_dim, kernel_size = 31)
 
         # Transformer
         self.transformer = Transformer(
@@ -54,7 +55,7 @@ class AudioPredictor(torch.nn.Module):
 
         # Solver
         def solver(t, z):
-            return self.forward(tokens.unsqueeze(0), audio_masked.unsqueeze(0), z.unsqueeze(0), mask.unsqueeze(0), times = t.unsqueeze(0)).squeeze(0)
+            return self.forward(tokens = tokens.unsqueeze(0), audio = audio_masked.unsqueeze(0), audio_noizy = z.unsqueeze(0), mask = mask.unsqueeze(0), times = t.unsqueeze(0)).squeeze(0)
         trajectory = odeint(solver, noise, times, atol = 1e-5, rtol = 1e-5, method = 'midpoint')
 
         # Output sample and full trajectory
@@ -116,7 +117,7 @@ class AudioPredictor(torch.nn.Module):
             loss = loss.masked_fill(~mask, 0.)
 
             # Number of masked frames
-            n_masked_frames = mask.sum(dim = -1).clamp(min = 1e-5)
+            n_masked_frames = mask.sum(dim = -1).clamp(min = 1)
 
             # Mean loss of expectation over masked loss
             loss = loss.sum(dim = -1) / n_masked_frames

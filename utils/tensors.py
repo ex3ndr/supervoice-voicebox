@@ -15,3 +15,12 @@ class RMSNorm(torch.nn.Module):
 
     def forward(self, x):
         return F.normalize(x, dim = -1) * self.scale * self.gamma
+    
+
+def probability_binary_mask(shape, true_prob, device):
+    return torch.zeros(shape, device = device).float().uniform_(0, 1) < true_prob
+
+
+def debug_if_invalid(x):
+    if torch.isnan(x).any() or torch.isinf(x).any():
+        print('Invalid tensor')
