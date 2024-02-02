@@ -20,6 +20,7 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange, reduce, repeat
 from accelerate import Accelerator, DistributedDataParallelKwargs
+import wandb
 
 # Local
 from train_config import config
@@ -32,8 +33,8 @@ from utils.dataset import get_aligned_dataset_loader
 train_experiment = "audio_acc"
 train_project="supervoice_audio"
 train_auto_resume = True
-train_batch_size = 8
-train_grad_accum_every = 16
+train_batch_size = 16
+train_grad_accum_every = 8
 train_steps = 600000
 train_loader_workers = 8
 train_log_every = 1
@@ -42,8 +43,10 @@ train_evaluate_every = 200
 train_evaluate_batches = 10
 train_max_segment_size = 500
 train_lr_start = 1e-7
-train_lr_max = 1e-5
-train_warmup_steps = 500
+train_lr_max = 1e-4
+train_warmup_steps = 5000
+train_mixed_precision = "fp16" # "bf16" or "fp16" or None
+train_clip_grad_norm = 0.2
 
 # Model parameters
 enable_autocast = True
@@ -55,15 +58,16 @@ def main():
 
     # Prepare accelerator
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-    accelerator = Accelerator(log_with="wandb", kwargs_handlers=[ddp_kwargs], gradient_accumulation_steps = train_grad_accum_every)
+    accelerator = Accelerator(log_with="wandb", kwargs_handlers=[ddp_kwargs], gradient_accumulation_steps = train_grad_accum_every, mixed_precision=train_mixed_precision)
     device = accelerator.device
     output_dir = Path("./output")
     output_dir.mkdir(parents=True, exist_ok=True)
+    dtype = torch.float16 if train_mixed_precision == "fp16" else torch.float32
 
     # Prepare dataset
     accelerator.print("Loading dataset...")
     tokenizer = Tokenizer(config)
-    train_loader = get_aligned_dataset_loader(names = ["libritts", "vctk"], max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer)
+    train_loader = get_aligned_dataset_loader(names = ["libritts", "vctk"], max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, dtype = dtype)
 
     # Prepare model
     accelerator.print("Loading model...")
@@ -84,9 +88,15 @@ def main():
         "train_lr_start": train_lr_start, 
         "train_lr_max": train_lr_max, 
         "batch_size": train_batch_size, 
+        "grad_accum_every": train_grad_accum_every,
         "steps": train_steps, 
+        "warmup_steps": train_warmup_steps,
+        "mixed_precision": train_mixed_precision,
+        "clip_grad_norm": train_clip_grad_norm,
     }
     accelerator.init_trackers(train_project, config=hps)
+    if accelerator.is_main_process:
+        wandb.watch(model, log="all")
 
     # Save
     def save():
@@ -139,54 +149,56 @@ def main():
         # Load batch
         for _ in range(train_grad_accum_every):
             with accelerator.accumulate(model):
-                batch = next(train_cycle)
-                tokens, audio = batch
-                batch_size = audio.shape[0]
-                seq_len = audio.shape[1]
+                with accelerator.autocast():
+                    batch = next(train_cycle)
+                    tokens, audio = batch
+                    batch_size = audio.shape[0]
+                    seq_len = audio.shape[1]
 
-                # Normalize audio
-                audio = (audio - config.audio.norm_mean) / config.audio.norm_std
+                    # Normalize audio
+                    audio = (audio - config.audio.norm_mean) / config.audio.norm_std
 
-                # Prepare Mask
-                # 70% - 100% of sequence with a minimum length of 10
-                # 30% rows of masking everything
-                min_mask_length = min(max(10, math.floor(seq_len * 0.7)), seq_len)
-                max_mask_length = seq_len
-                mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, 0.3, device)
+                    # Prepare Mask
+                    # 70% - 100% of sequence with a minimum length of 10
+                    # 30% rows of masking everything
+                    min_mask_length = min(max(10, math.floor(seq_len * 0.7)), seq_len)
+                    max_mask_length = seq_len
+                    mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, 0.3, device)
 
-                # 0.2 probability of dropping everything
-                conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
-                audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
-                tokens = drop_using_mask(source = tokens, replacement = tokenizer.unknown_token_id, mask = conditional_drop_mask)
-                mask = drop_using_mask(source = mask, replacement = 1, mask = conditional_drop_mask)
+                    # 0.2 probability of dropping everything
+                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
+                    audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
+                    tokens = drop_using_mask(source = tokens, replacement = tokenizer.unknown_token_id, mask = conditional_drop_mask)
+                    mask = drop_using_mask(source = mask, replacement = 1, mask = conditional_drop_mask)
 
-                # Prepare CFM
-                times = torch.rand((audio.shape[0],), dtype = audio.dtype, device = device)
-                sigma = 0.0 # What to use here?
-                t = rearrange(times, 'b -> b 1 1')
-                noise = torch.randn_like(audio, device=device)
-                audio_noizy = (1 - (1 - sigma) * t) * noise + t * audio
-                flow = audio - (1 - sigma) * noise
+                    # Prepare CFM
+                    times = torch.rand((audio.shape[0],), dtype = audio.dtype, device = device)
+                    sigma = 0.0 # What to use here?
+                    t = rearrange(times, 'b -> b 1 1')
+                    noise = torch.randn_like(audio, device=device)
+                    audio_noizy = (1 - (1 - sigma) * t) * noise + t * audio
+                    flow = audio - (1 - sigma) * noise
 
-                # Train step
-                predicted, loss = model(
-                    tokens = tokens, 
-                    audio = audio, 
-                    audio_noizy = audio_noizy, 
-                    mask = mask, 
-                    times = times, 
-                    target = flow
-                )
+                    # Train step
+                    predicted, loss = model(
+                        tokens = tokens, 
+                        audio = audio, 
+                        audio_noizy = audio_noizy, 
+                        mask = mask, 
+                        times = times, 
+                        target = flow
+                    )
 
-                # Check if loss is nan
-                if torch.isnan(loss):
-                    raise RuntimeError("Loss is NaN")
+                    # Check if loss is nan
+                    if torch.isnan(loss):
+                        raise RuntimeError("Loss is NaN")
 
-                # Backprop
-                optim.zero_grad()
-                accelerator.backward(loss)
-                accelerator.clip_grad_norm_(model.parameters(), 0.2)
-                optim.step()
+                    # Backprop
+                    optim.zero_grad()
+                    accelerator.backward(loss)
+                    if accelerator.sync_gradients:
+                        accelerator.clip_grad_norm_(model.parameters(), train_clip_grad_norm)
+                    optim.step()
 
         return loss, predicted, flow, mask, lr
 

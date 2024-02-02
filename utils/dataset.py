@@ -124,7 +124,7 @@ def load_common_voice_files(path, split):
         return [path + 'clips/' + row[1] for row in cvs_reader]
 
 
-def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer):
+def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer, dtype = None):
 
     # Load datasets
     def load_dataset(name):
@@ -219,6 +219,10 @@ def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer
 
             # Tokenize
             phonemes = tokenizer(phonemes)
+
+            # Cast
+            if dtype is not None:
+                audio = audio.to(dtype)
 
             # Outputs
             return phonemes, audio
