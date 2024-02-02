@@ -1,17 +1,11 @@
 import torch
 import torch.nn.functional as F
 
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
 class RMSNorm(torch.nn.Module):
-    def __init__(
-        self,
-        dim
-    ):
+    def __init__(self, dim):
         super().__init__()
         self.scale = dim ** 0.5
-        self.gamma = nn.Parameter(torch.ones(dim))
+        self.gamma = torch.nn.Parameter(torch.ones(dim))
 
     def forward(self, x):
         return F.normalize(x, dim = -1) * self.scale * self.gamma
@@ -24,3 +18,6 @@ def probability_binary_mask(shape, true_prob, device):
 def debug_if_invalid(x):
     if torch.isnan(x).any() or torch.isinf(x).any():
         print('Invalid tensor')
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)

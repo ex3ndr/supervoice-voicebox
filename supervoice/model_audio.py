@@ -1,9 +1,10 @@
+import math
 import torch
 import torch.nn.functional as F
-import math
-from .transformer import Transformer, ConvPositionEmbed
 from einops import rearrange, reduce, repeat
 from torchdiffeq import odeint
+
+from .transformer import Transformer, ConvPositionEmbed
 from .debug import debug_if_invalid
 
 class AudioPredictor(torch.nn.Module):

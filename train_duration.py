@@ -25,20 +25,20 @@ from einops import rearrange, reduce, repeat
 from train_config import config
 from voicebox.model_duration import DurationPredictor
 from voicebox.tokenizer import Tokenizer
-from utils.tensors import count_parameters, probability_binary_mask
+from voicebox.tensors import count_parameters, probability_binary_mask
 
 #
 # Device and config
 #
 
-project="duration"
-experiment = "duration_pre"
+experiment = "duration_sorted"
+project="voicebox_duration"
 tags = ["duration", "vctk", "libritts"]
-init_from = "resume" # or "scratch" or "resume"
+init_from = "scratch" # or "scratch" or "resume"
 train_batch_size = 64
 train_steps = 600000
 loader_workers = 4
-summary_interval = 100
+summary_interval = 1
 save_interval = 10000
 initial_lr = 1e-6
 default_lr = 1e-4
@@ -81,6 +81,7 @@ print("Loading dataset...")
 files = glob("datasets/vctk-aligned/**/*.TextGrid") + glob("datasets/libritts-aligned/**/*.TextGrid")
 # files = glob("datasets/vctk-aligned/**/*.TextGrid")[0:1000]
 files = [textgrid.TextGrid.fromFile(f) for f in tqdm(files)]
+files = sorted(files, key=lambda x: x.maxTime)
 
 # Tokenizer
 tokenizer = Tokenizer(config)
@@ -205,6 +206,7 @@ if enable_detect_anomaly:
 
     for name, submodule in model.named_modules():
         submodule.register_forward_hook(nan_hook)
+wandb.watch(model, log="all")
 
 #
 # Optimizer

@@ -26,27 +26,28 @@ from einops import rearrange, reduce, repeat
 from train_config import config
 from voicebox.model_audio import AudioPredictor
 from voicebox.tokenizer import Tokenizer
-from utils.tensors import count_parameters, probability_binary_mask
+from voicebox.tensors import count_parameters, probability_binary_mask
 
 #
 # Device and config
 #
 
-experiment = "audio_pre"
+experiment = "audio_v8"
 project="voicebox_audio"
 tags = ["audio", "vctk", "libritts"]
 init_from = "scratch" # or "scratch" or "resume"
-train_batch_size = 64
+train_batch_size = 12
+train_grad_accum_every = 16
 train_steps = 600000
 loader_workers = 8
-summary_interval = 100
-save_interval = 10000
+summary_interval = 1
+save_interval = 1000
 initial_lr = 1e-5
 default_lr = 1e-4
-warmup_steps = 5000
+warmup_steps = 500
 device = 'cuda:1'
 device_type = 'cuda' if 'cuda' in device else 'cpu'
-enable_autocast = False
+enable_autocast = True
 enable_compile = True
 enable_detect_anomaly = False
 
@@ -54,9 +55,11 @@ enable_detect_anomaly = False
 # Precision
 # 
 
-dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float32' # Using float32 since float16 sometimes not that stable
+# dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float32' # Using float32 since float16 sometimes not that stable
+dtype = 'float16'
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 autocast = nullcontext() if device_type == 'cpu' or not enable_autocast else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+scaler = torch.cuda.amp.GradScaler()
 torch.set_float32_matmul_precision('high')
 
 #
@@ -164,8 +167,16 @@ class TextGridDataset(torch.utils.data.Dataset):
                 phonemes.append(tok)
         phonemes = tokenizer(phonemes)
 
-        # Cut Audio
-        audio = audio[:len(phonemes)]
+        # Length
+        l = len(phonemes)
+        offset = 0
+        if l > 500:
+            l = 500
+            offset = random.randint(0, len(phonemes) - l)
+        
+        # Cut to size
+        phonemes = phonemes[offset:offset+l]
+        audio = audio[offset:offset+l]
 
         # Mask
         if random.uniform(0, 1) < 0.3: # If need to mask
@@ -177,13 +188,13 @@ class TextGridDataset(torch.utils.data.Dataset):
             mask_offset = random.uniform(0, 1 - mask_len)
 
             # Create mask
-            mask = torch.zeros(len(phonemes))
-            mask_start = math.floor(mask_offset * len(phonemes))
-            mask_end = math.floor((mask_offset + mask_len) * len(phonemes))
+            mask = torch.zeros(l)
+            mask_start = math.floor(mask_offset * l)
+            mask_end = math.floor((mask_offset + mask_len) * l)
             mask[mask_start : mask_end] = 1
             mask = mask.bool()
         else:
-            mask = torch.ones(len(phonemes)).bool()
+            mask = torch.ones(l).bool()
 
         # Outputs
         return phonemes, audio, mask
@@ -221,7 +232,7 @@ def collate_to_shortest(batch):
             ))
     return torch.stack([b[0] for b in padded]), torch.stack([b[1] for b in padded]), torch.stack([b[2] for b in padded])
 
-train_loader = DataLoader(training_dataset, num_workers=loader_workers, shuffle=True, batch_size=train_batch_size, pin_memory=True, collate_fn=collate_to_shortest)
+train_loader = DataLoader(training_dataset, num_workers=loader_workers, shuffle=False, batch_size=train_batch_size, pin_memory=True, collate_fn=collate_to_shortest)
 
 #
 # Model
@@ -259,6 +270,7 @@ for param in base_model.parameters():
     param_list.append(param)
 optim = torch.optim.AdamW([{'params': wd_params}, {'params': no_wd_params, 'weight_decay': 0}], initial_lr, betas=[0.9, 0.99],weight_decay=0.01)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = train_steps)
+wandb.watch(model, log="all")
 
 #
 # Save/Load
@@ -301,6 +313,10 @@ def cycle(dl):
 
 loader_cycle = cycle(train_loader)
 
+# Skip some steps
+for _ in tqdm(range(step * train_grad_accum_every)):
+    next(loader_cycle)
+
 def train_step():
     global step
 
@@ -314,61 +330,69 @@ def train_step():
         lr = scheduler.get_last_lr()[0]
 
     # Load batch
-    batch = next(loader_cycle)
-    tokens, audio, mask = batch
-    tokens = tokens.to(device, non_blocking=True)
-    audio = audio.to(device, non_blocking=True)
-    mask = mask.to(device, non_blocking=True)
+    for _ in range(train_grad_accum_every):
+        batch = next(loader_cycle)
+        tokens, audio, mask = batch
+        tokens = tokens.to(device, non_blocking=True)
+        audio = audio.to(device, non_blocking=True)
+        mask = mask.to(device, non_blocking=True)
 
-    # Prepare CFM
-    times = torch.rand((audio.shape[0],), dtype = audio.dtype, device = device)
-    sigma = 0.0 # What to use here?
-    t = rearrange(times, 'b -> b 1 1')
-    noise = torch.randn_like(audio, device=device)
-    audio_noizy = (1 - (1 - sigma) * t) * noise + t * audio
-    flow = audio - (1 - sigma) * noise
+        # Prepare CFM
+        times = torch.rand((audio.shape[0],), dtype = audio.dtype, device = device)
+        sigma = 0.0 # What to use here?
+        t = rearrange(times, 'b -> b 1 1')
+        noise = torch.randn_like(audio, device=device)
+        audio_noizy = (1 - (1 - sigma) * t) * noise + t * audio
+        flow = audio - (1 - sigma) * noise
 
-    # Drop tokens and audio completely
-    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
-    audio = torch.where(
-        rearrange(conditional_drop_mask, '... -> ... 1 1'),
-        torch.zeros_like(audio, dtype = tokens.dtype, device = device),
-        audio
-    )
-    tokens = torch.where(
-        rearrange(conditional_drop_mask, '... -> ... 1'),
-        torch.full(tokens.shape, tokenizer.unknown_token_id, dtype = tokens.dtype, device = device),
-        tokens
-    )
-    mask = torch.where(
-        rearrange(conditional_drop_mask, '... -> ... 1'),
-        torch.ones_like(mask), # Make mask all ones if we drop
-        mask
-    )
+        # Drop tokens and audio completely
+        # conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
+        # audio = torch.where(
+        #     rearrange(conditional_drop_mask, '... -> ... 1 1'),
+        #     torch.zeros_like(audio, dtype = tokens.dtype, device = device),
+        #     audio
+        # )
+        # tokens = torch.where(
+        #     rearrange(conditional_drop_mask, '... -> ... 1'),
+        #     torch.full(tokens.shape, tokenizer.unknown_token_id, dtype = tokens.dtype, device = device),
+        #     tokens
+        # )
+        # mask = torch.where(
+        #     rearrange(conditional_drop_mask, '... -> ... 1'),
+        #     torch.ones_like(mask), # Make mask all ones if we drop
+        #     mask
+        # )
 
-    # Train step
-    with torch.autograd.detect_anomaly() if enable_detect_anomaly else nullcontext():
+        # Train step
+        optim.zero_grad()
+        with torch.autograd.detect_anomaly() if enable_detect_anomaly else nullcontext():
 
-        # Forward
-        with autocast:
-            predicted, loss = model(
-                tokens = tokens, 
-                audio = audio, 
-                audio_noizy = audio_noizy, 
-                mask = mask, 
-                times = times, 
-                target = flow
-            )
+            # Forward
+            with autocast:
+                predicted, loss = model(
+                    tokens = tokens, 
+                    audio = audio, 
+                    audio_noizy = audio_noizy, 
+                    mask = mask, 
+                    times = times, 
+                    target = flow
+                )
 
-        # Check if loss is nan
-        if torch.isnan(loss):
-            raise RuntimeError("Loss is NaN")
+            # Check if loss is nan
+            if torch.isnan(loss):
+                raise RuntimeError("Loss is NaN")
 
-        # Backprop
-        optim.zero_grad()   
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
-        optim.step()
+            # Backprop
+            # loss.backward()
+            scaler.scale(loss / train_grad_accum_every).backward()
+            
+        
+    # Optimizer
+    # optim.step()
+    scaler.unscale_(optim)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
+    scaler.step(optim)
+    scaler.update()
 
     # Advance
     step = step + 1

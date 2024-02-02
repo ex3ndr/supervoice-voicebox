@@ -12,7 +12,8 @@ import torchaudio
 from pathlib import Path
 from tqdm import tqdm
 from utils.dataset import load_common_voice_files
-from utils.audio import load_mono_audio, spectogram, trim_silence
+from supervoice.audio import load_mono_audio, spectogram
+from utils.audio trim_silence
 from train_config import config
 import torchaudio
 import os
