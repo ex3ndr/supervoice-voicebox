@@ -114,7 +114,7 @@ def main():
             'optimizer': optim.state_dict(), 
             'scheduler': scheduler.state_dict(),
 
-        },  f'./checkpoints/{experiment}.pt')
+        },  fname_step)
 
         # Overwrite main checkpoint
         shutil.copyfile(fname_step, fname)
