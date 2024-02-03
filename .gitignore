@@ -9,3 +9,5 @@ datasets
 wandb
 .mfa
 pretrained
+output
+*.code-workspace

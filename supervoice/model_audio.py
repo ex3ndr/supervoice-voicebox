@@ -33,7 +33,8 @@ class AudioPredictor(torch.nn.Module):
             n_dim_head = self.config.n_dim_head,
             n_dim_ffn = self.config.n_dim_ffn,
             n_non_bias_tokens = 1, # Exclude time embedding from attention bias
-            dropout = 0.1
+            att_dropout = 0,
+            ffn_dropout = 0.1
         )
 
         # Prediction
@@ -110,6 +111,13 @@ class AudioPredictor(torch.nn.Module):
             
             # Compute MSE loss
             loss = F.mse_loss(output, target, reduction = 'none')
+
+            # Check if loss is nan
+            if torch.isnan(loss).any():
+                print(output)
+                print(target)
+                print(loss)
+                raise RuntimeError("Loss is NaN (mse)")
 
             # Mean for each frame
             loss = reduce(loss, 'b n d -> b n', 'mean')

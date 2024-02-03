@@ -121,6 +121,8 @@ def main():
 
     # Load
     if train_auto_resume and (output_dir / f"{train_experiment}.pt").exists():
+        accelerator.print("Resuming training...")
+        checkpoint = torch.load(str(output_dir / f"{train_experiment}.pt"), map_location="cpu")
 
         # Model
         accelerator.unwrap_model(model).load_state_dict(checkpoint['model'])
@@ -214,7 +216,7 @@ def main():
         step = step + 1
 
         # Summary
-        if step % train_log_every == 0:
+        if step % train_log_every == 0 and accelerator.is_main_process:
             accelerator.log({
                 "learning_rate": lr,
                 "loss": loss,
@@ -229,7 +231,7 @@ def main():
             accelerator.print(f'Step {step}: loss={loss}, lr={lr}')
         
         # Save
-        if step % train_save_every == 0:
+        if step % train_save_every == 0 and accelerator.is_main_process:
             save()
 
     # End training

@@ -15,7 +15,8 @@ class Transformer(nn.Module):
         n_dim_head,
         n_dim_ffn,
         n_non_bias_tokens,
-        dropout,
+        att_dropout, 
+        ffn_dropout,
         position_embedding = 'alibi', # or rotary
     ):
         super(Transformer, self).__init__()
@@ -31,7 +32,8 @@ class Transformer(nn.Module):
                 n_dim = n_dim, 
                 n_dim_head = n_dim_head, 
                 n_dim_ffn = n_dim_ffn,
-                dropout = dropout
+                att_dropout = att_dropout,
+                ffn_dropout = ffn_dropout
             ))
         
         # Skip connections
@@ -105,12 +107,12 @@ class Transformer(nn.Module):
 
 
 class AttentionBlock(torch.nn.Module):
-    def __init__(self, n_heads, n_dim, n_dim_head, n_dim_ffn, dropout):
+    def __init__(self, n_heads, n_dim, n_dim_head, n_dim_ffn, att_dropout, ffn_dropout):
         super(AttentionBlock, self).__init__()
 
         self.n_heads = n_heads
         self.n_dim_head = n_dim_head
-        self.dropout = dropout
+        self.att_dropout = att_dropout
 
         # Attention input layer norm
         self.attention_ln = RMSNorm(n_dim)
@@ -120,20 +122,20 @@ class AttentionBlock(torch.nn.Module):
         torch.nn.init.normal_(self.attention.weight, mean=0.0, std=0.02)
 
         # Attention dropout
-        self.attention_dropout = nn.Dropout(dropout)
+        # self.attention_dropout = nn.Dropout(att_dropout)
 
         # Output flatten multiple heads into single tensor
         self.attention_output = nn.Linear(n_dim_head * n_heads, n_dim, bias=False)
         torch.nn.init.normal_(self.attention_output.weight, mean=0.0, std=0.02)
 
         # Attention dropout
-        self.attention_output_dropout = nn.Dropout(dropout)
+        # self.attention_output_dropout = nn.Dropout(dropout)
 
         # MLP part
         self.mlp_ln = RMSNorm(n_dim)
         self.mlp_input = nn.Linear(n_dim, n_dim_ffn)
         self.mlp_output = nn.Linear(n_dim_ffn, n_dim)
-        self.mlp_output_dropout = nn.Dropout(dropout)
+        self.mlp_output_dropout = nn.Dropout(ffn_dropout)
 
     def forward(self, x, alibi = None, rotational = None):
 
@@ -156,14 +158,14 @@ class AttentionBlock(torch.nn.Module):
 
         # Dot product attention
         with torch.backends.cuda.sdp_kernel(enable_mem_efficient=False):
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask = alibi if alibi is not None else None, dropout_p=self.dropout if self.training else 0.0) # Using ALiBi as a mask
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask = alibi if alibi is not None else None, dropout_p=self.att_dropout if self.training else 0.0) # Using ALiBi as a mask
 
         # Reassemble all head outputs side by side
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_heads * self.n_dim_head) # re-assemble all head outputs side by side
 
         # Output
         y = self.attention_output(y)
-        y = self.attention_output_dropout(y)
+        # y = self.attention_output_dropout(y)
 
         # Residual
         y = residual + y

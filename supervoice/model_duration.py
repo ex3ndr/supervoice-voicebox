@@ -25,7 +25,8 @@ class DurationPredictor(torch.nn.Module):
             n_dim_head = self.config.n_dim_head,
             n_dim_ffn = self.config.n_dim_ffn,
             n_non_bias_tokens = 0,
-            dropout = 0.1
+            att_dropout = 0,
+            ffn_dropout = 0.1
         )
 
         # Prediction
