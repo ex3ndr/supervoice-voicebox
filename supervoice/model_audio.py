@@ -63,7 +63,7 @@ class AudioPredictor(torch.nn.Module):
         # Output sample and full trajectory
         return trajectory[-1], trajectory
 
-    def forward(self, *, tokens, audio, audio_noizy, mask, times, target = None):
+    def forward(self, *, tokens, audio, audio_noizy, mask, times, target = None, debug = False, debug_save = False):
         
         #
         # Prepare
@@ -76,32 +76,52 @@ class AudioPredictor(torch.nn.Module):
         # Mask out audio
         audio_masked = audio.masked_fill(mask.unsqueeze(-1), 0.0) # Mask need to be reshaped: (B, T) -> (B, T, 1)
 
+        if debug:
+            debug_if_invalid(target, 'target', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
+
         #
         # Compute
         #
 
         # Convert phonemes to embeddings
         tokens_embed = self.token_embedding(tokens)
+        if debug:
+            debug_if_invalid(tokens_embed, 'tokens_embed', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Combine phoneme embeddings, masked audio and noizy audio
         output = torch.cat([tokens_embed, audio_masked, audio_noizy], dim = -1)
+        if debug:
+            debug_if_invalid(output, 'output_1', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Apply transformer input layer
         output = self.transformer_input(output)
+        if debug:
+            debug_if_invalid(output, 'output_2', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Apply sinusoidal positional embedding
         sinu_times = self.sinu_pos_emb(times).unsqueeze(1)
         output = torch.cat([output, sinu_times], dim=1)
+        if debug:
+            debug_if_invalid(output, 'output_3', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Apply convolutional positional encoder
         output = self.conv_embed(output) + output
+        if debug:
+            debug_if_invalid(output, 'output_4', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Run through transformer
         output = self.transformer(output)
+        if debug:
+            debug_if_invalid(output, 'output_5', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Predict durations
         output = self.prediction(output)
-        output = output[:, :-1, :] # Cut to length
+        if debug:
+            debug_if_invalid(output, 'output_6', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
+
+
+        # Cut to length
+        output = output[:, :-1, :]
 
         #
         # Loss
@@ -114,10 +134,7 @@ class AudioPredictor(torch.nn.Module):
 
             # Check if loss is nan
             if torch.isnan(loss).any():
-                print(output)
-                print(target)
-                print(loss)
-                raise RuntimeError("Loss is NaN (mse)")
+                debug_if_invalid(loss, 'loss_mse', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
             # Mean for each frame
             loss = reduce(loss, 'b n d -> b n', 'mean')

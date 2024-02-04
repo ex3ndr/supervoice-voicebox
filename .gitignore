@@ -11,3 +11,4 @@ wandb
 pretrained
 output
 *.code-workspace
+debug_*

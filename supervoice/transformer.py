@@ -18,11 +18,13 @@ class Transformer(nn.Module):
         att_dropout, 
         ffn_dropout,
         position_embedding = 'alibi', # or rotary
+        enable_skip_connections = True
     ):
         super(Transformer, self).__init__()
         self.n_layers = n_layers
         self.n_heads = n_heads
         self.n_non_bias_tokens = n_non_bias_tokens
+        self.enable_skip_connections = enable_skip_connections
 
         # Attention blocks
         self.layers = torch.nn.ModuleList([])
@@ -38,8 +40,9 @@ class Transformer(nn.Module):
         
         # Skip connections
         self.skip_combiners = torch.nn.ModuleList([])
-        for i in range(n_layers//2):
-            self.skip_combiners.append(torch.nn.Linear(n_dim * 2, n_dim))
+        if enable_skip_connections:
+            for i in range(n_layers//2):
+                self.skip_combiners.append(torch.nn.Linear(n_dim * 2, n_dim))
 
         # Output normalization
         self.output_norm = RMSNorm(n_dim)
@@ -87,8 +90,8 @@ class Transformer(nn.Module):
         for i in range(self.n_layers):
 
             # Skip connection
-            if self.n_layers - (self.n_layers // 2) < i:
-                s = connections.pop() * 2 ** -0.5
+            if self.n_layers - (self.n_layers // 2) < i and self.enable_skip_connections:
+                s = connections.pop()
                 x = torch.cat([x, s], dim = -1)
                 x = self.skip_combiners[i - (self.n_layers // 2)](x)
 
@@ -148,7 +151,7 @@ class AttentionBlock(torch.nn.Module):
         y = self.attention_ln(x)
 
         # Calculation Q/K/V for each head
-        q, k, v = self.attention(x).chunk(3, dim = -1)
+        q, k, v = self.attention(y).chunk(3, dim = -1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.n_heads), (q, k, v))
         
         # Rotary embedding
@@ -157,7 +160,7 @@ class AttentionBlock(torch.nn.Module):
             k = apply_rotary_pos_emb(rotational, k)
 
         # Dot product attention
-        with torch.backends.cuda.sdp_kernel(enable_mem_efficient=False):
+        with torch.backends.cuda.sdp_kernel(enable_mem_efficient=True, enable_math=False): # Math backend is broken on mixed precision
             y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask = alibi if alibi is not None else None, dropout_p=self.att_dropout if self.training else 0.0) # Using ALiBi as a mask
 
         # Reassemble all head outputs side by side
