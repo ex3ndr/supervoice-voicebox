@@ -50,7 +50,7 @@ class Transformer(nn.Module):
         # Positional embedding
         self.position_embedding = position_embedding
         if position_embedding == 'alibi':
-            self.register_buffer('slopes', get_slopes_power_of_2(n_heads))
+            pass
         elif position_embedding == 'rotary':
             theta = 50000
             self.register_buffer('inv_freq', 1.0 / (theta ** (torch.arange(0, n_dim_head, 2).float() / n_dim)))
@@ -69,13 +69,7 @@ class Transformer(nn.Module):
         # This computes ALiBi bias mask, excluding non-bias tokens which are expected to be appended to the end of the sequence
         # Inspired by: https://github.com/ofirpress/attention_with_linear_biases/issues/5
         if self.position_embedding == 'alibi':
-            content_len = seq_len - self.n_non_bias_tokens
-            context_position = torch.arange(content_len, device = x.device)[:, None]
-            memory_position = torch.arange(content_len, device = x.device)[None, :]
-            relative_position = memory_position - context_position 
-            relative_position = torch.abs(relative_position).unsqueeze(0).expand(self.n_heads, -1,-1)
-            alibi = self.slopes.unsqueeze(1).unsqueeze(1) * relative_position
-            alibi = alibi.view(1, self.n_heads, content_len, content_len)
+            alibi = get_alibi_mask(seq_len - self.n_non_bias_tokens, self.n_heads, x.device)
             if self.n_non_bias_tokens > 0:
                 alibi = torch.nn.functional.pad(alibi, (0, self.n_non_bias_tokens, 0, self.n_non_bias_tokens), value=0)
 
@@ -212,10 +206,32 @@ class ConvPositionEmbed(nn.Module):
 # ALiBi implementation
 #
 
-def get_slopes_power_of_2(n):
-    start = (2**(-2**-(math.log2(n)-3)))
-    ratio = start
-    return torch.tensor([start*ratio**i for i in range(n)], requires_grad=False) * -1
+slopes_cache = {}
+def get_slopes_power_of_2(n_heads, device):
+    global slopes_cache
+    key = str(n_heads) + "_" + str(device)
+    if key not in slopes_cache:
+        start = (2**(-2**-(math.log2(n_heads)-3)))
+        ratio = start
+        slopes_cache[key] = torch.tensor([start*ratio**i for i in range(n_heads)], requires_grad=False, device = device) * -1
+    return slopes_cache[key]
+
+alibi_cache = {}
+def get_alibi_mask(seq_len, n_heads, device):
+    global alibi_cache
+    key = str(seq_len) + "_" + str(n_heads) + "_" + str(device)
+
+    if key not in alibi_cache:
+        slopes = get_slopes_power_of_2(n_heads, device)
+        context_position = torch.arange(seq_len, device = device)[:, None]
+        memory_position = torch.arange(seq_len, device = device)[None, :]
+        relative_position = memory_position - context_position 
+        relative_position = torch.abs(relative_position).unsqueeze(0).expand(n_heads, -1,-1)
+        alibi = slopes.unsqueeze(1).unsqueeze(1) * relative_position
+        alibi = alibi.view(1, n_heads, seq_len, seq_len)
+        alibi_cache[key] = alibi
+
+    return alibi_cache[key]
 
 
 def rotate_half(x):

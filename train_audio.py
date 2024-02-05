@@ -31,7 +31,7 @@ from supervoice.tensors import count_parameters, probability_binary_mask, drop_u
 from utils.dataset import get_aligned_dataset_loader
 
 # Train parameters
-train_experiment = "audio_fp16_fix_norm"
+train_experiment = "audio_fp16_release"
 train_project="supervoice_audio"
 train_auto_resume = True
 train_batch_size = 16 # Per GPU
@@ -224,13 +224,16 @@ def main():
 
     accelerator.print("Training started at step", step)
     while step < train_steps:
+        start = time.time()
         loss, predicted, flow, mask, lr = train_step()
+        end = time.time()
 
         # Advance
         step = step + 1
 
         # Summary
         if step % train_log_every == 0 and accelerator.is_main_process:
+            speed = mask.shape[0] * mask.shape[1] / (end - start)
             accelerator.log({
                 "learning_rate": lr,
                 "loss": loss,
@@ -241,8 +244,9 @@ def main():
                 "target/max": flow.max(),
                 "target/min": flow.min(),
                 "data/length": mask.shape[1],
+                "speed": speed
             }, step=step)
-            accelerator.print(f'Step {step}: loss={loss}, lr={lr}')
+            accelerator.print(f'Step {step}: loss={loss}, lr={lr}, time={end - start} sec, it/s={speed}')
         
         # Save
         if step % train_save_every == 0 and accelerator.is_main_process:
