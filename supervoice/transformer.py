@@ -154,8 +154,8 @@ class AttentionBlock(torch.nn.Module):
             k = apply_rotary_pos_emb(rotational, k)
 
         # Dot product attention
-        with torch.backends.cuda.sdp_kernel(enable_mem_efficient=True, enable_math=False): # Math backend is broken on mixed precision
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask = alibi if alibi is not None else None, dropout_p=self.att_dropout if self.training else 0.0) # Using ALiBi as a mask
+        # with torch.backends.cuda.sdp_kernel(enable_mem_efficient=True, enable_math=False): # Math backend is broken on mixed precision
+        y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask = alibi if alibi is not None else None, dropout_p=self.att_dropout if self.training else 0.0) # Using ALiBi as a mask
 
         # Reassemble all head outputs side by side
         y = y.transpose(1, 2).contiguous().view(B, T, self.n_heads * self.n_dim_head) # re-assemble all head outputs side by side

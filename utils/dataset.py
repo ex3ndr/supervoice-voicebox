@@ -137,7 +137,7 @@ def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer
         tg = [textgrid.TextGrid.fromFile(dataset_dir + "/" + f + ".TextGrid") for f in tqdm(files)]
 
         # Load audio
-        files = [dataset_audio_dir + "/" + f + ".pt" for f in files]    
+        files = [dataset_audio_dir + "/" + f + ".pt" for f in files]
 
         return tg, files
 

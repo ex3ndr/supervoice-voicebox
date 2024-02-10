@@ -1,4 +1,3 @@
-# List your datasets here
 datasets:
   - lj-speech-1.1
   - vctk-corpus-0.92
