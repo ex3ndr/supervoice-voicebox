@@ -10,5 +10,14 @@ class Tokenizer:
         self.unknown_token_id = self.token_to_id[self.unknown_token]
         self.silence_token_id = self.token_to_id[self.silence_token]
 
-    def __call__(self, tokens):
-        return torch.tensor([(self.token_to_id[token] if token in self.token_to_id else self.unknown_token_id) for token in tokens])
+    def __call__(self, tokens, force = False):
+        if force:
+            return torch.tensor([(self.token_to_id[token] if token in self.token_to_id else self.unknown_token_id) for token in tokens])
+        else:
+            missing = []
+            for token in tokens:
+                if token not in self.token_to_id:
+                    missing.append(token)
+            if missing:
+                raise ValueError(f"Tokens not found: {missing}")
+            return torch.tensor([self.token_to_id[token] for token in tokens])

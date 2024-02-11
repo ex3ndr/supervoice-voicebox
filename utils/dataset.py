@@ -7,6 +7,7 @@ import torchaudio
 import torchaudio.transforms as T
 import torchaudio.functional as F
 import math
+import json
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import textgrid
@@ -91,6 +92,21 @@ class SpecAudioDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.files)
+
+class PhonemesDataset(torch.utils.data.Dataset):
+    def __init__(self, path, transformer, tokenizer):
+        self.tokenizer = tokenizer
+        self.transformer = transformer
+        with open(path, 'r') as json_file:
+            self.items = list(json_file)
+    def __getitem__(self, index):
+        data = json.loads(self.items[index])
+        if self.transformer is not None:
+            return self.transformer(data)
+        else:
+            return data
+    def __len__(self):
+        return len(self.items)
 
 def load_mono_audio(src, sample_rate, device=None):
 
@@ -254,3 +270,70 @@ def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer
     return DataLoader(dataset, num_workers=workers, shuffle=False, batch_size=batch_size, pin_memory=True, collate_fn=collate_to_shortest)
 
 
+def get_phonemes_dataset(path, max_length, workers, batch_size, tokenizer, phoneme_duration, dtype = None):
+
+    # Transform dataset
+    def transformer(data):
+
+        # Convert to phonemes and durations
+        phonemes, durations = [], []
+        last_time = 0
+        last_silence = True
+        for word in data['w']:
+
+            # Extract data
+            start = word['t'][0]
+            end = word['t'][1]
+
+            # Process word or silence
+            if word['w'] is None:
+                durations.append(round((end - start) / phoneme_duration))
+                phonemes.append(tokenizer.silence_token)
+                last_silence = True
+            else:
+                if not last_silence: # Add empty silence
+                    durations.append(0)
+                    phonemes.append(tokenizer.silence_token)
+                last_silence = False
+                for phone in word['p']:
+                    if phone['p'] is not None:
+                        phonemes.append(phone['p'])
+                        durations.append(round((phone['t'][1] - phone['t'][0]) / phoneme_duration))
+
+        # Convert to tensor
+        phonemes = tokenizer(phonemes)
+        durations = torch.tensor(durations)
+
+        # Cast
+        if dtype is not None:
+            durations = durations.to(dtype)
+        
+        # Outputs
+        return phonemes, durations
+
+    # Create dataset
+    dataset = PhonemesDataset(path, transformer, tokenizer)
+
+    # Collator
+    def collate_to_shortest(batch):
+
+        # Find minimum length
+        min_len = min([b[0].shape[0] for b in batch])
+
+        # Pad
+        padded = []
+        for b in batch:
+            if b[0].shape[0] > min_len:
+                offset = random.randint(0, b[0].shape[0] - min_len)
+                padded.append((
+                    b[0][offset:offset + min_len],
+                    b[1][offset:offset + min_len]
+                ))
+            else:
+                padded.append((
+                    b[0],
+                    b[1]
+                ))
+        return torch.stack([b[0] for b in padded]), torch.stack([b[1] for b in padded])
+
+    return DataLoader(dataset, num_workers=workers, shuffle=False, batch_size=batch_size, pin_memory=True, collate_fn=collate_to_shortest)

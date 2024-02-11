@@ -50,11 +50,6 @@ train_warmup_steps = 5000
 train_mixed_precision = "fp16" # "bf16" or "fp16" or None
 train_clip_grad_norm = 0.2
 
-# Model parameters
-enable_autocast = True
-enable_compile = True
-enable_detect_anomaly = False
-
 # Train
 def main():
 
