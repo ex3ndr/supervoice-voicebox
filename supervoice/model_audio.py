@@ -6,7 +6,7 @@ from torchdiffeq import odeint
 
 from .transformer import Transformer, ConvPositionEmbed
 from .debug import debug_if_invalid
-from .tensors import drop_using_mask
+from .tensors import drop_using_mask, merge_mask
 
 class AudioPredictor(torch.nn.Module):
     def __init__(self, config):
@@ -48,21 +48,58 @@ class AudioPredictor(torch.nn.Module):
         #
 
         # Mask out audio
-        audio_masked = drop_using_mask(source = audio, replacement = 0, mask = mask)
+        source_audio = audio
+        audio = drop_using_mask(source = audio, replacement = 0, mask = mask)
 
         # Create noise
-        noise = torch.randn_like(audio_masked).to(audio_masked.device)
+        noise = torch.randn_like(audio)
 
         # Create time interpolation
-        times = torch.linspace(0, 1, steps, device = audio_masked.device)
+        times = torch.linspace(0, 1, steps, device = audio.device)
 
+        #
         # Solver
+        # 
+
+        # Overwrite audio segment with predicted audio according to mask
+        def merge_predicted(predicted):
+            return merge_mask(source = source_audio, replacement = predicted, mask = mask)
+
         def solver(t, z):
-            return self.forward(tokens = tokens.unsqueeze(0), audio = audio_masked.unsqueeze(0), audio_noizy = z.unsqueeze(0), times = t.unsqueeze(0)).squeeze(0)
+
+            # If alpha is not provided
+            if alpha is None:
+                return self.forward(tokens = tokens.unsqueeze(0), audio = audio.unsqueeze(0), audio_noizy = z.unsqueeze(0), times = t.unsqueeze(0)).squeeze(0)
+
+            # If alpha is provided - zero out tokens and audio and mix together
+            tokens_empty = torch.zeros_like(tokens)
+            audio_empty = torch.zeros_like(audio)
+
+            # Mix together
+            tokens_t = torch.stack([tokens_empty, tokens], dim = 0)
+            audio_t = torch.stack([audio_empty, audio], dim = 0)
+            audio_noizy_t = torch.stack([z, z], dim = 0) # Just double it
+            t_t = torch.stack([t, t], dim = 0) # Just double it
+
+            # Inference
+            predicted_mix = self.forward(tokens = tokens_t, audio = audio_t, audio_noizy = audio_noizy_t, times = t_t)
+            predicted_conditioned = predicted_mix[1]
+            predicted_unconditioned = predicted_mix[0]
+            
+            # CFG prediction
+            # NOTE: One paper has a mistake in the formula and it used addition instead of subtraction
+            prediction = (1 + alpha) * predicted_conditioned - alpha * predicted_unconditioned
+
+            return prediction
+
+
         trajectory = odeint(solver, noise, times, atol = 1e-5, rtol = 1e-5, method = 'midpoint')
 
+        #
         # Output sample and full trajectory
-        return trajectory[-1], trajectory
+        #
+
+        return merge_predicted(trajectory[-1]), trajectory
 
     def forward(self, *, tokens, audio, audio_noizy, times, mask = None, target = None):
         

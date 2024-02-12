@@ -28,6 +28,11 @@ def drop_using_mask(source, replacement, mask):
         mask = mask.unsqueeze(-1)
     return torch.where(mask, torch.full(source.shape, replacement, dtype = source.dtype, device = source.device), source)
 
+def merge_mask(source, replacement, mask):
+    while mask.dim() < source.dim():
+        mask = mask.unsqueeze(-1)
+    return torch.where(mask, replacement, source)
+
 def interval_mask(batch_size, length, min_interval, max_interval, probability_all, device):
     tensor = torch.full((batch_size, length), False, device = device, dtype = torch.bool)
     for i in range(batch_size):

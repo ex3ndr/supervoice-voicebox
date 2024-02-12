@@ -31,7 +31,7 @@ from supervoice.tensors import count_parameters, probability_binary_mask, drop_u
 from utils.dataset import get_aligned_dataset_loader, get_aligned_dataset_dumb_loader
 
 # Train parameters
-train_experiment = "audio_large_pre"
+train_experiment = "audio_large_pre_fix"
 train_project="supervoice-audio"
 train_datasets = ["libritts", "vctk", 'common-voice-en', 'common-voice-ru', 'common-voice-uk']
 train_pretraining_filelist = './datasets/list_pretrain.csv'
@@ -178,32 +178,21 @@ def main():
                     audio_noizy = (1 - (1 - sigma) * t) * noise + t * audio
                     flow = audio - (1 - sigma) * noise
 
-                    # Masking
-                    if train_pretraining:
+                    # Prepare Mask
+                    # 70% - 100% of sequence with a minimum length of 10
+                    # 30% rows of masking everything
+                    min_mask_length = min(max(10, math.floor(seq_len * 0.7)), seq_len)
+                    max_mask_length = seq_len
+                    mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, 0.3, device)
 
-                        # Create a full mask (tokens already erased from dataloader)
-                        mask = torch.ones((batch_size, seq_len), dtype = dtype, device = device).bool()
+                    # Drop audio (but not tokens) depending on mask
+                    audio = drop_using_mask(source = audio, replacement = 0, mask = mask)
 
-                        # 0.2 probability of dropping audio too
-                        conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
-                        audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
-                    else:
-
-                        # Prepare Mask
-                        # 70% - 100% of sequence with a minimum length of 10
-                        # 30% rows of masking everything
-                        min_mask_length = min(max(10, math.floor(seq_len * 0.7)), seq_len)
-                        max_mask_length = seq_len
-                        mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, 0.3, device)
-
-                        # Drop audio (but not tokens) depending on mask
-                        audio = drop_using_mask(source = audio, replacement = 0, mask = mask)
-
-                        # 0.2 probability of dropping everything
-                        conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
-                        audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
-                        tokens = drop_using_mask(source = tokens, replacement = tokenizer.unknown_token_id, mask = conditional_drop_mask)
-                        mask = drop_using_mask(source = mask, replacement = 1, mask = conditional_drop_mask)
+                    # 0.2 probability of dropping everything
+                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
+                    audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
+                    tokens = drop_using_mask(source = tokens, replacement = tokenizer.unknown_token_id, mask = conditional_drop_mask)
+                    mask = drop_using_mask(source = mask, replacement = 1, mask = conditional_drop_mask)
 
                     # Train step
                     predicted, loss = model(
