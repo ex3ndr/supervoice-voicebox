@@ -12,45 +12,30 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import textgrid
 
-class SimpleAudioDataset(torch.utils.data.Dataset):
+class AudioFileListDataset(torch.utils.data.Dataset):
     
-    def __init__(self, files, sample_rate, segment_size, vad = False, transformer = None):
-        self.files = files
-        self.sample_rate = sample_rate
+    def __init__(self, path, segment_size, transformer = None):
         self.segment_size = segment_size
         self.transformer = transformer
-        self.vad = None
-        if vad:
-            self.vad = torchaudio.transforms.Vad(sample_rate=self.sample_rate)
+        with open(path, 'r') as filelist:
+            self.rows = list(filelist)
+        random.shuffle(self.rows)
     
     def __getitem__(self, index):
 
         # Load File
-        filename = self.files[index]
+        r = self.rows[index]
+        filename, length = r.split(',')
 
         # Load audio
-        audio = load_mono_audio(filename, self.sample_rate)
+        audio = torch.load(filename[:-3] + "pt").transpose(0, 1)
 
         # Pad or trim to target duration
         if audio.shape[0] >= self.segment_size:
             audio_start = random.randint(0, audio.shape[0] - self.segment_size)
             audio = audio[audio_start:audio_start+self.segment_size]
         elif audio.shape[0] < self.segment_size: # Rare or impossible case - just pad with zeros
-            audio = torch.nn.functional.pad(audio, (0, self.segment_size - audio.shape[0]))
-
-        # VAD
-        if self.vad is not None:
-            audio = audio.unsqueeze(0)
-
-            # Trim front
-            audio = self.vad(audio)
-
-            # Trin end
-            audio, _ = torchaudio.sox_effects.apply_effects_tensor(audio, self.sample_rate, [["reverse"]])
-            audio = self.vad(audio)
-            audio, _ = torchaudio.sox_effects.apply_effects_tensor(audio, self.sample_rate, [["reverse"]])
-
-            audio = audio.squeeze(0)
+            audio = torch.nn.functional.pad(audio, (0, 0, 0, self.segment_size - audio.shape[0]))
 
         # Transformer
         if self.transformer is not None:
@@ -59,7 +44,7 @@ class SimpleAudioDataset(torch.utils.data.Dataset):
             return audio
 
     def __len__(self):
-        return len(self.files)
+        return len(self.rows)
 
 
 class SpecAudioDataset(torch.utils.data.Dataset):
@@ -140,7 +125,7 @@ def load_common_voice_files(path, split):
         return [path + 'clips/' + row[1] for row in cvs_reader]
 
 
-def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer, dtype = None):
+def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer, phoneme_duration, dtype = None):
 
     # Load datasets
     def load_dataset(name):
@@ -172,7 +157,6 @@ def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer
     def extract_textgrid(src):
 
         # Prepare
-        token_duration = 0.01
         tokens = src[1]
         time = 0
         output_tokens = []
@@ -183,7 +167,7 @@ def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer
 
             # Resolve durations
             ends = t.maxTime
-            duration = math.floor((ends - time) / token_duration)
+            duration = math.floor((ends - time) / phoneme_duration)
             time = ends
 
             # Resolve token
@@ -268,6 +252,16 @@ def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer
         return torch.stack([b[0] for b in padded]), torch.stack([b[1] for b in padded])
 
     return DataLoader(dataset, num_workers=workers, shuffle=False, batch_size=batch_size, pin_memory=True, collate_fn=collate_to_shortest)
+
+def get_aligned_dataset_dumb_loader(path, max_length, workers, batch_size, tokenizer, phoneme_duration, dtype = None):
+
+    # Dataset
+    def transformer(data):
+        return torch.zeros(data.shape[0]).long(), data
+    dataset = AudioFileListDataset(path, max_length, transformer)
+
+    # Loader
+    return DataLoader(dataset, num_workers=workers, shuffle=False, batch_size=batch_size, pin_memory=True)
 
 
 def get_phonemes_dataset(path, max_length, workers, batch_size, tokenizer, phoneme_duration, dtype = None):

@@ -6,6 +6,7 @@ from torchdiffeq import odeint
 
 from .transformer import Transformer, ConvPositionEmbed
 from .debug import debug_if_invalid
+from .tensors import drop_using_mask
 
 class AudioPredictor(torch.nn.Module):
     def __init__(self, config):
@@ -40,14 +41,14 @@ class AudioPredictor(torch.nn.Module):
         # Prediction
         self.prediction = torch.nn.Linear(self.config.n_dim, config.audio.n_mels)
 
-    def sample(self, *, tokens, audio, mask, steps):
+    def sample(self, *, tokens, audio, mask, steps, alpha = None):
         
         #
         # Prepare
         #
 
-        # Mask out y
-        audio_masked = audio.masked_fill(mask.unsqueeze(-1), 0.0) # Mask need to be reshaped: (B, T) -> (B, T, 1)
+        # Mask out audio
+        audio_masked = drop_using_mask(source = audio, replacement = 0, mask = mask)
 
         # Create noise
         noise = torch.randn_like(audio_masked).to(audio_masked.device)
@@ -57,27 +58,29 @@ class AudioPredictor(torch.nn.Module):
 
         # Solver
         def solver(t, z):
-            return self.forward(tokens = tokens.unsqueeze(0), audio = audio_masked.unsqueeze(0), audio_noizy = z.unsqueeze(0), mask = mask.unsqueeze(0), times = t.unsqueeze(0)).squeeze(0)
+            return self.forward(tokens = tokens.unsqueeze(0), audio = audio_masked.unsqueeze(0), audio_noizy = z.unsqueeze(0), times = t.unsqueeze(0)).squeeze(0)
         trajectory = odeint(solver, noise, times, atol = 1e-5, rtol = 1e-5, method = 'midpoint')
 
         # Output sample and full trajectory
         return trajectory[-1], trajectory
 
-    def forward(self, *, tokens, audio, audio_noizy, mask, times, target = None, debug = False, debug_save = False):
+    def forward(self, *, tokens, audio, audio_noizy, times, mask = None, target = None):
         
         #
         # Prepare
         #
 
+        if mask is None and target is not None:
+            raise ValueError('Mask is required when target is provided')
+        if target is None and mask is not None:
+            raise ValueError('Mask is not required when target is not provided')
+
         # Check shapes
-        assert tokens.shape[0] == audio.shape[0] == audio_noizy.shape[0] == mask.shape[0] # Batch
-        assert tokens.shape[1] == audio.shape[1] == audio_noizy.shape[1] == mask.shape[1] # Sequence length
-
-        # Mask out audio
-        audio_masked = audio.masked_fill(mask.unsqueeze(-1), 0.0) # Mask need to be reshaped: (B, T) -> (B, T, 1)
-
-        if debug:
-            debug_if_invalid(target, 'target', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
+        assert tokens.shape[0] == audio.shape[0] == audio_noizy.shape[0] # Batch
+        assert tokens.shape[1] == audio.shape[1] == audio_noizy.shape[1] # Sequence length
+        if mask is not None:
+            assert tokens.shape[0] == mask.shape[0]
+            assert tokens.shape[1] == mask.shape[1]
 
         #
         # Compute
@@ -85,40 +88,25 @@ class AudioPredictor(torch.nn.Module):
 
         # Convert phonemes to embeddings
         tokens_embed = self.token_embedding(tokens)
-        if debug:
-            debug_if_invalid(tokens_embed, 'tokens_embed', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Combine phoneme embeddings, masked audio and noizy audio
-        output = torch.cat([tokens_embed, audio_masked, audio_noizy], dim = -1)
-        if debug:
-            debug_if_invalid(output, 'output_1', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
+        output = torch.cat([tokens_embed, audio, audio_noizy], dim = -1)
 
         # Apply transformer input layer
         output = self.transformer_input(output)
-        if debug:
-            debug_if_invalid(output, 'output_2', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Apply sinusoidal positional embedding
         sinu_times = self.sinu_pos_emb(times).unsqueeze(1)
         output = torch.cat([output, sinu_times], dim=1)
-        if debug:
-            debug_if_invalid(output, 'output_3', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Apply convolutional positional encoder
         output = self.conv_embed(output) + output
-        if debug:
-            debug_if_invalid(output, 'output_4', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Run through transformer
         output = self.transformer(output)
-        if debug:
-            debug_if_invalid(output, 'output_5', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
         # Predict durations
         output = self.prediction(output)
-        if debug:
-            debug_if_invalid(output, 'output_6', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
-
 
         # Cut to length
         output = output[:, :-1, :]
@@ -131,10 +119,6 @@ class AudioPredictor(torch.nn.Module):
             
             # Compute MSE loss
             loss = F.mse_loss(output, target, reduction = 'none')
-
-            # Check if loss is nan
-            if torch.isnan(loss).any():
-                debug_if_invalid(loss, 'loss_mse', self, { 'tokens': tokens, 'audio': audio, 'audio_noizy': audio_noizy, 'mask': mask, 'times': times, 'target': target }, debug_save)
 
             # Mean for each frame
             loss = reduce(loss, 'b n d -> b n', 'mean')

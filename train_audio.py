@@ -28,14 +28,14 @@ from train_config import config
 from supervoice.model_audio import AudioPredictor
 from supervoice.tokenizer import Tokenizer
 from supervoice.tensors import count_parameters, probability_binary_mask, drop_using_mask, interval_mask
-from utils.dataset import get_aligned_dataset_loader
+from utils.dataset import get_aligned_dataset_loader, get_aligned_dataset_dumb_loader
 
 # Train parameters
 train_experiment = "audio_large_pre"
-train_project="supervoice_audio"
-train_datasets = ["common-voice-en", "common-voice-ru" , "common-voice-uk"] # Pretraining
-# train_datasets = ["libritts", "vctk"] # Fine-tuning
-train_enable_phoenemes = True
+train_project="supervoice-audio"
+train_datasets = ["libritts", "vctk", 'common-voice-en', 'common-voice-ru', 'common-voice-uk']
+train_pretraining_filelist = './datasets/list_pretrain.csv'
+train_pretraining = True
 train_auto_resume = True
 train_batch_size = 16 # Per GPU
 train_grad_accum_every = 8
@@ -72,12 +72,16 @@ def main():
     # Prepare dataset
     accelerator.print("Loading dataset...")
     tokenizer = Tokenizer(config)
-    train_loader = get_aligned_dataset_loader(names = train_datasets, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, dtype = dtype)
+    if train_pretraining:
+        train_loader = get_aligned_dataset_dumb_loader(path = train_pretraining_filelist, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = 0.01, dtype = dtype)
+    else:
+        train_loader = get_aligned_dataset_loader(names = train_datasets, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = 0.01, dtype = dtype)
 
     # Prepare model
     accelerator.print("Loading model...")
     step = 0
-    model = AudioPredictor(config)
+    raw_model = AudioPredictor(config)
+    model = raw_model
     wd_params, no_wd_params = [], []
     for param in model.parameters():
         param_list = no_wd_params if param.ndim < 2 else wd_params
@@ -112,7 +116,7 @@ def main():
         torch.save({
 
             # Model
-            'model': accelerator.get_state_dict(model), 
+            'model': raw_model.state_dict(), 
 
             # Optimizer
             'step': step,
@@ -130,7 +134,7 @@ def main():
         checkpoint = torch.load(str(output_dir / f"{train_experiment}.pt"), map_location="cpu")
 
         # Model
-        accelerator.unwrap_model(model).load_state_dict(checkpoint['model'])
+        raw_model.load_state_dict(checkpoint['model'])
 
         # Optimizer
         optim.load_state_dict(checkpoint['optimizer'])
@@ -177,9 +181,8 @@ def main():
                     # Masking
                     if train_pretraining:
 
-                        # Create a full mask and erase tokens
+                        # Create a full mask (tokens already erased from dataloader)
                         mask = torch.ones((batch_size, seq_len), dtype = dtype, device = device).bool()
-                        tokens = drop_using_mask(source = tokens, replacement = tokenizer.unknown_token_id, mask = conditional_drop_mask)
 
                         # 0.2 probability of dropping audio too
                         conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
@@ -192,6 +195,9 @@ def main():
                         min_mask_length = min(max(10, math.floor(seq_len * 0.7)), seq_len)
                         max_mask_length = seq_len
                         mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, 0.3, device)
+
+                        # Drop audio (but not tokens) depending on mask
+                        audio = drop_using_mask(source = audio, replacement = 0, mask = mask)
 
                         # 0.2 probability of dropping everything
                         conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
@@ -206,9 +212,7 @@ def main():
                         audio_noizy = audio_noizy, 
                         mask = mask, 
                         times = times, 
-                        target = flow,
-                        debug = accelerator.is_main_process,
-                        debug_save = True
+                        target = flow
                     )
 
                     # Check if loss is nan
