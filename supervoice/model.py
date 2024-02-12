@@ -71,7 +71,7 @@ class SuperVoice(torch.nn.Module):
         # Prepare token tensor
         tokens_t = []
         for (t, d) in zip(tokens.tolist(), duration.squeeze(0).tolist()):
-            for i in range(d * 2):
+            for i in range(d):
                 tokens_t.append(t)
         tokens_t = torch.tensor(tokens_t)
 

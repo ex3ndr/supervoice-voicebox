@@ -156,7 +156,7 @@ def load_common_voice_corpus(path):
         # Append
         files.append((file, text, speaker))
 
-    return { 'files': files, 'speakers': speakers, 'vad': False } # VAD is very slow and we are not using this audio for training anyway
+    return { 'files': files, 'speakers': speakers, 'vad': True }
 
 def execute_run():
 
@@ -166,6 +166,8 @@ def execute_run():
     collections['libritts'] = load_libritts_corpus()
     collections['vctk'] = load_vctk_corpus()
     collections['common-voice-en'] = load_common_voice_corpus("external_datasets/common-voice-16.0-en/en")
+    collections['common-voice-ru'] = load_common_voice_corpus("external_datasets/common-voice-16.0-ru/ru")
+    collections['common-voice-uk'] = load_common_voice_corpus("external_datasets/common-voice-16.0-uk/uk")
 
     # Process collections
     for collection in collections:

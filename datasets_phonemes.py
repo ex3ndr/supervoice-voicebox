@@ -68,7 +68,12 @@ def extract_phonemes(collection, path):
 
 # Indexing files
 print("Loading files...")
-files = glob.glob("datasets/vctk-aligned/*/*.TextGrid") + glob.glob("datasets/libritts-aligned/*/*.TextGrid") + glob.glob("datasets/common-voice-en-aligned/*/*.TextGrid")
+files = [] 
+files += glob.glob("datasets/vctk-aligned/*/*.TextGrid") 
+files += glob.glob("datasets/libritts-aligned/*/*.TextGrid")
+files += glob.glob("datasets/common-voice-en-aligned/*/*.TextGrid")
+files += glob.glob("datasets/common-voice-ru-aligned/*/*.TextGrid") 
+files += glob.glob("datasets/common-voice-uk-aligned/*/*.TextGrid")
 
 # Process files
 print("Processing files...")

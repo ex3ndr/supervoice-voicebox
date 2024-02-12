@@ -31,12 +31,15 @@ from supervoice.tensors import count_parameters, probability_binary_mask, drop_u
 from utils.dataset import get_aligned_dataset_loader
 
 # Train parameters
-train_experiment = "audio_fp16_release"
+train_experiment = "audio_large_pre"
 train_project="supervoice_audio"
+train_datasets = ["common-voice-en", "common-voice-ru" , "common-voice-uk"] # Pretraining
+# train_datasets = ["libritts", "vctk"] # Fine-tuning
+train_enable_phoenemes = True
 train_auto_resume = True
 train_batch_size = 16 # Per GPU
 train_grad_accum_every = 8
-train_steps = 600000
+train_steps = 1000000
 train_loader_workers = 8
 train_log_every = 1
 train_save_every = 1000
@@ -69,7 +72,7 @@ def main():
     # Prepare dataset
     accelerator.print("Loading dataset...")
     tokenizer = Tokenizer(config)
-    train_loader = get_aligned_dataset_loader(names = ["libritts", "vctk"], max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, dtype = dtype)
+    train_loader = get_aligned_dataset_loader(names = train_datasets, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, dtype = dtype)
 
     # Prepare model
     accelerator.print("Loading model...")
@@ -163,19 +166,6 @@ def main():
                     # Normalize audio
                     audio = (audio - config.audio.norm_mean) / config.audio.norm_std
 
-                    # Prepare Mask
-                    # 70% - 100% of sequence with a minimum length of 10
-                    # 30% rows of masking everything
-                    min_mask_length = min(max(10, math.floor(seq_len * 0.7)), seq_len)
-                    max_mask_length = seq_len
-                    mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, 0.3, device)
-
-                    # 0.2 probability of dropping everything
-                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
-                    audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
-                    tokens = drop_using_mask(source = tokens, replacement = tokenizer.unknown_token_id, mask = conditional_drop_mask)
-                    mask = drop_using_mask(source = mask, replacement = 1, mask = conditional_drop_mask)
-
                     # Prepare CFM
                     times = torch.rand((audio.shape[0],), dtype = audio.dtype, device = device)
                     sigma = 0.0 # What to use here?
@@ -183,6 +173,31 @@ def main():
                     noise = torch.randn_like(audio, device=device)
                     audio_noizy = (1 - (1 - sigma) * t) * noise + t * audio
                     flow = audio - (1 - sigma) * noise
+
+                    # Masking
+                    if train_pretraining:
+
+                        # Create a full mask and erase tokens
+                        mask = torch.ones((batch_size, seq_len), dtype = dtype, device = device).bool()
+                        tokens = drop_using_mask(source = tokens, replacement = tokenizer.unknown_token_id, mask = conditional_drop_mask)
+
+                        # 0.2 probability of dropping audio too
+                        conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
+                        audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
+                    else:
+
+                        # Prepare Mask
+                        # 70% - 100% of sequence with a minimum length of 10
+                        # 30% rows of masking everything
+                        min_mask_length = min(max(10, math.floor(seq_len * 0.7)), seq_len)
+                        max_mask_length = seq_len
+                        mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, 0.3, device)
+
+                        # 0.2 probability of dropping everything
+                        conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
+                        audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
+                        tokens = drop_using_mask(source = tokens, replacement = tokenizer.unknown_token_id, mask = conditional_drop_mask)
+                        mask = drop_using_mask(source = mask, replacement = 1, mask = conditional_drop_mask)
 
                     # Train step
                     predicted, loss = model(
