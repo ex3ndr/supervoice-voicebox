@@ -4,11 +4,13 @@ config = dict_to_object({
 
     # Shared audio parameters
     "audio": {
-        "sample_rate": 16000,
-        "n_mels": 80,
+        "sample_rate": 24000,
+        "n_mels": 100,
         "n_fft": 1024,
-        "hop_size": 160,
-        "win_size": 640,
+        "hop_size": 256,
+        "win_size": 256 * 4,
+        "mel_norm": "slaney",
+        "mel_scale": "htk",
         "norm_std": 2.2615,
         "norm_mean": -5.8843
     },

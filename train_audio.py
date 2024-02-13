@@ -31,11 +31,11 @@ from supervoice.tensors import count_parameters, probability_binary_mask, drop_u
 from utils.dataset import get_aligned_dataset_loader, get_aligned_dataset_dumb_loader
 
 # Train parameters
-train_experiment = "audio_large_pre_fix"
+train_experiment = "audio_large_common"
 train_project="supervoice-audio"
-train_datasets = ["libritts", "vctk", 'common-voice-en', 'common-voice-ru', 'common-voice-uk']
+train_datasets = ["libritts", "vctk"]
 train_pretraining_filelist = './datasets/list_pretrain.csv'
-train_pretraining = True
+train_pretraining = False
 train_auto_resume = True
 train_batch_size = 16 # Per GPU
 train_grad_accum_every = 8
@@ -72,10 +72,11 @@ def main():
     # Prepare dataset
     accelerator.print("Loading dataset...")
     tokenizer = Tokenizer(config)
+    phoneme_duration = config.audio.hop_size / config.audio.sample_rate
     if train_pretraining:
-        train_loader = get_aligned_dataset_dumb_loader(path = train_pretraining_filelist, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = 0.01, dtype = dtype)
+        train_loader = get_aligned_dataset_dumb_loader(path = train_pretraining_filelist, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
     else:
-        train_loader = get_aligned_dataset_loader(names = train_datasets, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = 0.01, dtype = dtype)
+        train_loader = get_aligned_dataset_loader(names = train_datasets, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
 
     # Prepare model
     accelerator.print("Loading model...")

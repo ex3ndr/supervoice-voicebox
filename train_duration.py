@@ -44,7 +44,7 @@ train_save_every = 1000
 train_watch_every = 1000
 train_evaluate_every = 200
 train_evaluate_batches = 10
-train_max_segment_size = 1024
+train_max_segment_size = config.audio.hop_size * 100
 train_lr_start = 1e-7
 train_lr_max = 2e-5
 train_warmup_steps = 5000
@@ -71,7 +71,8 @@ def main():
     # Prepare dataset
     accelerator.print("Loading dataset...")
     tokenizer = Tokenizer(config)
-    train_loader = get_phonemes_dataset("./datasets/phonemes.jsonl", max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, dtype = dtype, phoneme_duration = 0.01)
+    phoneme_duration = config.audio.hop_size / config.audio.sample_rate
+    train_loader = get_phonemes_dataset("./datasets/phonemes.jsonl", max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, dtype = dtype, phoneme_duration = phoneme_duration)
 
     # Model
     accelerator.print("Loading model...")

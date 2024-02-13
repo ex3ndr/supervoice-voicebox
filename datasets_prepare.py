@@ -36,18 +36,18 @@ def execute_parallel(args):
     target_name = str(index).zfill(8)
 
     # Load audio
-    waveform = load_mono_audio(file, 16000, device=device)
+    waveform = load_mono_audio(file, config.audio.sample_rate, device=device)
 
     # Trim silence
     if vad:
-        waveform = trim_silence(waveform, 16000)
+        waveform = trim_silence(waveform, config.audio.sample_rate)
 
     # Spectogram
-    spec = spectogram(waveform, config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.sample_rate)
+    spec = spectogram(waveform, config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.mel_norm, config.audio.mel_scale, config.audio.sample_rate)
 
     # Save
     target_dir = os.path.join(collection_dir, speaker_directory(speaker))
-    torchaudio.save(os.path.join(target_dir, target_name + ".wav"), waveform.unsqueeze(0).cpu(), 16000)
+    torchaudio.save(os.path.join(target_dir, target_name + ".wav"), waveform.unsqueeze(0).cpu(), config.audio.sample_rate)
     torch.save(spec.cpu(), os.path.join(target_dir, target_name + ".pt"))
     with open(os.path.join(target_dir, target_name + ".txt"), "w", encoding="utf-8") as f:
         f.write(text)
@@ -84,7 +84,7 @@ def load_vctk_corpus():
         else:
             print("Strange filename:", filename)    
 
-    return { 'files': files, 'speakers': speakers, 'vad': True }
+    return { 'files': files, 'speakers': speakers, 'vad': False }
 
 def load_libritts_corpus():
     files = []
@@ -165,9 +165,9 @@ def execute_run():
     collections = {}
     collections['libritts'] = load_libritts_corpus()
     collections['vctk'] = load_vctk_corpus()
-    collections['common-voice-en'] = load_common_voice_corpus("external_datasets/common-voice-16.0-en/en")
-    collections['common-voice-ru'] = load_common_voice_corpus("external_datasets/common-voice-16.0-ru/ru")
-    collections['common-voice-uk'] = load_common_voice_corpus("external_datasets/common-voice-16.0-uk/uk")
+    # collections['common-voice-en'] = load_common_voice_corpus("external_datasets/common-voice-16.0-en/en")
+    # collections['common-voice-ru'] = load_common_voice_corpus("external_datasets/common-voice-16.0-ru/ru")
+    # collections['common-voice-uk'] = load_common_voice_corpus("external_datasets/common-voice-16.0-uk/uk")
 
     # Process collections
     for collection in collections:

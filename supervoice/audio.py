@@ -23,9 +23,9 @@ def hann_window(size, device):
 #
 
 melscale_fbank_cache = {}
-def melscale_fbanks(n_mels, n_fft, f_min, f_max, sample_rate, device):
+def melscale_fbanks(n_mels, n_fft, f_min, f_max, sample_rate, mel_norm, mel_scale, device):
     global melscale_fbank_cache
-    key = str(n_mels) + "_" + str(n_fft) + "_" + str(f_min) + "_" + str(f_max) + "_" + str(sample_rate) + "_" + str(device)
+    key = str(n_mels) + "_" + str(n_fft) + "_" + str(f_min) + "_" + str(f_max) + "_" + str(sample_rate) + "_" + str(mel_norm) + "_" + str(mel_scale) + "_"+ str(device)
     if key in melscale_fbank_cache:
         return melscale_fbank_cache[key]
     else:
@@ -35,7 +35,8 @@ def melscale_fbanks(n_mels, n_fft, f_min, f_max, sample_rate, device):
             f_min=f_min,
             f_max=f_max,
             n_mels=n_mels,
-            norm="slaney",
+            norm=mel_norm,
+            mel_scale=mel_scale
         ).transpose(-1, -2).to(device)
         melscale_fbank_cache[key] = res
         return res
@@ -61,25 +62,33 @@ def resampler(from_sample_rate, to_sample_rate, device=None):
 # Spectogram caclulcation
 #
 
-def spectogram(audio, n_fft, n_mels, n_hop, n_window, sample_rate):
+def spectogram(audio, n_fft, n_mels, n_hop, n_window, mel_norm, mel_scale, sample_rate):
 
     # Hann Window
     window = hann_window(n_window, audio.device)
 
     # STFT
     stft = torch.stft(audio, 
-        n_fft, 
-        hop_length=n_hop, 
-        win_length=n_window,
-        window=window, 
-        return_complex=False
+        
+        # STFT Parameters
+        n_fft = n_fft, 
+        hop_length = n_hop, 
+        win_length = n_window,
+        window = window, 
+        center = True,
+        
+        onesided = True, # Default to true to real input, but we enforce it just in case
+        return_complex = True
     )
 
-    # Compute magnitudes using squared value
-    magnitudes = torch.sum((stft ** 2), dim=-1)[..., :-1]
+    # Compute magnitudes (|a + ib| = sqrt(a^2 + b^2)) instead of power spectrum (|a + ib|^2 = a^2 + b^2)
+    # because magnitude and phase is linear to the input, while power spectrum is quadratic to the input
+    # and the magnitude is easier to learn for vocoder
+    # magnitudes = stft[..., :-1].abs() ** 2 # Power
+    magnitudes = stft[..., :-1].abs() # Amplitude
 
     # Mel Log Bank
-    mel_filters = melscale_fbanks(n_mels, n_fft, 0, sample_rate / 2, sample_rate, audio.device)
+    mel_filters = melscale_fbanks(n_mels, n_fft, 0, sample_rate / 2, sample_rate, mel_norm, mel_scale, audio.device)
     mel_spec = (mel_filters @ magnitudes)
 
     # Log
