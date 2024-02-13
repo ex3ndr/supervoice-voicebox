@@ -92,10 +92,9 @@ def spectogram(audio, n_fft, n_mels, n_hop, n_window, mel_norm, mel_scale, sampl
     mel_spec = (mel_filters @ magnitudes)
 
     # Log
-    log_spec = torch.clamp(mel_spec, min=1e-10).log10()
+    log_spec = torch.clamp(mel_spec, min=1e-10).log()
 
     return log_spec
-
 
 #
 # Load Mono Audio

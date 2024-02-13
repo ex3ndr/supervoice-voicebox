@@ -10,7 +10,7 @@ config = dict_to_object({
         "hop_size": 256,
         "win_size": 256 * 4,
         "mel_norm": "slaney",
-        "mel_scale": "htk",
+        "mel_scale": "slaney",
         "norm_std": 2.2615,
         "norm_mean": -5.8843
     },
