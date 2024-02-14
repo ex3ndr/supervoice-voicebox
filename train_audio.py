@@ -160,6 +160,7 @@ def main():
             lr = scheduler.get_last_lr()[0] / accelerator.num_processes
 
         # Load batch
+        total = 0
         for _ in range(train_grad_accum_every):
             with accelerator.accumulate(model):
                 with accelerator.autocast():
@@ -167,6 +168,7 @@ def main():
                     tokens, audio = batch
                     batch_size = audio.shape[0]
                     seq_len = audio.shape[1]
+                    total += batch_size * seq_len
 
                     # Normalize audio
                     audio = (audio - config.audio.norm_mean) / config.audio.norm_std
@@ -205,9 +207,9 @@ def main():
                         target = flow
                     )
 
-                    # Check if loss is nan
-                    if torch.isnan(loss) and accelerator.is_main_process:
-                        raise RuntimeError("Loss is NaN")
+                    # # Check if loss is nan
+                    # if torch.isnan(loss) and accelerator.is_main_process:
+                    #     raise RuntimeError("Loss is NaN")
 
                     # Backprop
                     optim.zero_grad()
@@ -220,7 +222,7 @@ def main():
                     if optim.step_was_skipped:
                         accelerator.print("Step was skipped")
 
-        return loss, predicted, flow, mask, lr
+        return loss, predicted, flow, total, lr
 
     #
     # Start Training
@@ -229,7 +231,8 @@ def main():
     accelerator.print("Training started at step", step)
     while step < train_steps:
         start = time.time()
-        loss, predicted, flow, mask, lr = train_step()
+        loss, predicted, flow, total, lr = train_step()
+        total = total * accelerator.num_processes # Scale to all processes
         end = time.time()
 
         # Advance
@@ -237,7 +240,7 @@ def main():
 
         # Summary
         if step % train_log_every == 0 and accelerator.is_main_process:
-            speed = mask.shape[0] * mask.shape[1] / (end - start)
+            speed = total / (end - start)
             accelerator.log({
                 "learning_rate": lr,
                 "loss": loss,
@@ -247,7 +250,7 @@ def main():
                 "target/mean": flow.mean(),
                 "target/max": flow.max(),
                 "target/min": flow.min(),
-                "data/length": mask.shape[1],
+                "data/length": total,
                 "speed": speed
             }, step=step)
             accelerator.print(f'Step {step}: loss={loss}, lr={lr}, time={end - start} sec, it/s={speed}')

@@ -20,6 +20,15 @@ from train_config import config
 
 PARAM_WORKERS = torch.cuda.device_count() * 4
 
+CLEANUP_SYMBOLS = [
+    "\n",
+    "\r",
+    "\t",
+    "-",
+    "\"",
+    "\'"
+]
+
 #
 # Execution
 #
@@ -44,6 +53,12 @@ def execute_parallel(args):
 
     # Spectogram
     spec = spectogram(waveform, config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.mel_norm, config.audio.mel_scale, config.audio.sample_rate)
+
+    # Clean up text
+    for symbol in CLEANUP_SYMBOLS:
+        text = text.replace(symbol, " ")
+    text = " ".join(text.split()) # Remove multiple spaces
+    text = text.strip()
 
     # Save
     target_dir = os.path.join(collection_dir, speaker_directory(speaker))

@@ -117,13 +117,85 @@ def load_mono_audio(src, sample_rate, device=None):
     return audio
 
 
-def load_common_voice_files(path, split):
+def normalize_continious_phonemes(src):
     res = []
-    with open(path + f'{split}.tsv') as csvfile:
-        cvs_reader = csv.reader(csvfile, delimiter='\t', quoting=csv.QUOTE_NONE)
-        next(cvs_reader, None)  # skip the headers
-        return [path + 'clips/' + row[1] for row in cvs_reader]
+    time = 0
+    for t in src:
+        tok = t[0]
+        start = t[1]
+        end = t[2]
+        if start != time:
+            res.append(('<SIL>', time, start))
+        res.append(t)
+        time = end
+    return res
 
+def quantisize_phoneme_positions(src, phoneme_duration):
+    res = []
+    for t in src:
+        tok = t[0]
+        # NOTE: We are expecting src to be normalized and start and end to match in adjacent tokens
+        start = int(t[1] // phoneme_duration)
+        end = int(t[2] // phoneme_duration)
+        res.append((tok, start, end))
+    return res
+
+def continious_phonemes_to_discreete(raw_phonemes, phoneme_duration):
+
+    # Normalize: add silence between intervals,
+    #            ensure that start of any token is equal to end of a previous,
+    #            ensure that first token is zero
+    raw_phonemes = normalize_continious_phonemes(raw_phonemes)
+
+    # Quantisize offsets: convert from real one to a discreete one
+    quantisized = quantisize_phoneme_positions(raw_phonemes, phoneme_duration)
+
+    # Convert to intervals
+    intervals = [(i[0], i[2] - i[1]) for i in quantisized]
+
+    return intervals
+
+def extract_textgrid_alignments(tg):
+    output = []
+    for t in tg[1]:
+        ends = t.maxTime
+        tok = t.mark
+        if tok == '': # Ignore spaces
+            continue
+        if tok == 'spn':
+            tok = '<UNK>'
+        output.append((tok, t.minTime, t.maxTime))
+    return output
+
+def prepare_textgrid_alignments(tg, total_duration, phoneme_duration):
+
+    # Extract alignments
+    x = extract_textgrid_alignments(tg)
+
+    # Convert to discreete
+    x = continious_phonemes_to_discreete(x, phoneme_duration)
+
+    # Pad with silence
+    total_length = sum([i[1] for i in x])
+    assert total_length <= total_duration # We don't have reverse in our datasets
+    if total_length < total_duration:
+        x += [('<SIL>', total_duration - total_length)]
+
+    assert total_length >= 2 # We expect at least two tokens
+
+    # Patch first token
+    if x[0][1] == 1:
+        x[0][0] = '<BEGIN>'
+    else:
+        x = [('<BEGIN>', 1), (x[0][0], x[0][1] - 1)] + x[1:]
+
+    # Patch last token
+    if x[-1][1] == 1:
+        x[-1][0] = '<END>'
+    else:
+        x = x[:-1] + [(x[-1][0], x[-1][1] - 1), ('<END>', 1)]
+
+    return x
 
 def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer, phoneme_duration, dtype = None):
 
@@ -192,19 +264,16 @@ def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer
             return len(self.files)        
         def __getitem__(self, index):
 
-            # Load textgrid and audio
-            tokens, durations = extract_textgrid(self.textgrid[index])
+            # Spectogram
             audio = torch.load(self.files[index])
-        
-            # Reshape audio (C, T) -> (T, C)
-            audio = audio.transpose(0, 1)
+            audio = audio.transpose(0, 1) # Reshape audio (C, T) -> (T, C)
 
             # Phonemes
+            aligned_phonemes = prepare_textgrid_alignments(self.textgrid[index], audio.shape[0], phoneme_duration)
             phonemes = []
-            for t in range(len(tokens)):
-                tok = tokens[t]
-                for i in range(durations[t]):
-                    phonemes.append(tok)
+            for t in aligned_phonemes:
+                for i in range(t[1]):
+                    phonemes.append(t[0])
 
             # Length
             l = len(phonemes)

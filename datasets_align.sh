@@ -3,15 +3,20 @@ set -e
 # Download models
 mfa model download acoustic english_mfa
 mfa model download dictionary english_mfa
+mfa model download dictionary english_us_mfa
 mfa model download acoustic russian_mfa
 mfa model download dictionary russian_mfa
 mfa model download acoustic ukrainian_mfa
 mfa model download dictionary ukrainian_mfa
 
 # Process VCTK
-mfa align "$PWD/datasets/vctk-prepared" english_mfa english_mfa "$PWD/datasets/vctk-aligned" -t "$PWD/.mfa/" -j 16 --clean
+mfa validate "$PWD/datasets/vctk-prepared" english_us_mfa english_mfa "$PWD/datasets/vctk-aligned" -t "$PWD/.mfa/" -j 16 --clean
+# mfa align "$PWD/datasets/vctk-prepared" english_mfa english_mfa "$PWD/datasets/vctk-aligned" -t "$PWD/.mfa/" -j 16 --clean
+mfa align "$PWD/datasets/vctk-prepared" english_us_mfa english_mfa "$PWD/datasets/vctk-aligned" -t "$PWD/.mfa/" -j 16 --clean
 
 # Process LibriTTS
+mfa validate "$PWD/datasets/libritts-prepared" english_us_mfa english_mfa "$PWD/datasets/libritts-aligned" -t "$PWD/.mfa/" -j 16 --clean
+# mfa align "$PWD/datasets/libritts-prepared" english_mfa english_mfa "$PWD/datasets/libritts-aligned" -t "$PWD/.mfa/" -j 16 --clean
 mfa align "$PWD/datasets/libritts-prepared" english_us_mfa english_mfa "$PWD/datasets/libritts-aligned" -t "$PWD/.mfa/" -j 16 --clean
 
 # Process Common Voice EN

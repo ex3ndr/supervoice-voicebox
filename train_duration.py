@@ -32,7 +32,7 @@ from supervoice.tensors import count_parameters, probability_binary_mask, drop_u
 from utils.dataset import get_phonemes_dataset
 
 # Train parameters
-train_experiment = "duration_pre"
+train_experiment = "duration_common"
 train_project="supervoice-duration"
 train_auto_resume = True
 train_batch_size = 256 # Per GPU

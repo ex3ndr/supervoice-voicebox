@@ -57,7 +57,10 @@ def extract_phonemes(collection, path):
             if phone.minTime != last_phone_time:
                 word_phonemes.append({'t': [last_phone_time + time_offset, phone.minTime + time_offset], 'p': None})
             if phone.minTime >= word.minTime and phone.maxTime <= word.maxTime and phone.mark != "":
-                word_phonemes.append({'t': [phone.minTime + time_offset, phone.maxTime + time_offset], 'p': phone.mark})
+                m = phone.mark
+                if m == "spn":
+                    m = '<UNK>'
+                word_phonemes.append({'t': [phone.minTime + time_offset, phone.maxTime + time_offset], 'p': m})
             last_phone_time = phone.maxTime
 
         # Processed word
