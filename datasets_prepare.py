@@ -18,7 +18,7 @@ from train_config import config
 # Parameters
 #
 
-PARAM_WORKERS = torch.cuda.device_count() * 4
+PARAM_WORKERS = max(torch.cuda.device_count() * 4, 8)
 
 CLEANUP_SYMBOLS = [
     "\n",
@@ -26,7 +26,7 @@ CLEANUP_SYMBOLS = [
     "\t",
     "-",
     "\"",
-    "\'"
+    # "\'" # Breaks the text with apostrophes
 ]
 
 #
@@ -101,22 +101,38 @@ def load_vctk_corpus():
 
     return { 'files': files, 'speakers': speakers, 'vad': False }
 
-def load_libritts_corpus():
+def load_libritts_corpus(collections):
     files = []
     speakers = {}
 
     # Ignore bad samples
     ignored = {}
-    for file_list_file in ["train-clean-100_bad_sample_list.txt", "train-clean-360_bad_sample_list.txt", "train-other-500_bad_sample_list.txt"]:
+    ignore_files = [
+        "train-clean-100_bad_sample_list.txt", 
+        "train-clean-360_bad_sample_list.txt", 
+        "train-other-500_bad_sample_list.txt", 
+        "test-clean_bad_sample_list.txt", 
+        "test-other_bad_sample_list.txt",
+        "dev-clean_bad_sample_list.txt",
+        "dev-other_bad_sample_list.txt"
+    ]
+    for file_list_file in ignore_files:
         with open("external_datasets/libritts-r/failed/" + file_list_file, "r") as f:
             for line in f:
                 line = line.replace("./train-clean-100/", "external_datasets/libritts-r-clean-100/")
                 line = line.replace("./train-clean-360/", "external_datasets/libritts-r-clean-360/")
                 line = line.replace("./train-other-500/", "external_datasets/libritts-r-other-500/")
+                line = line.replace("./test-clean/", "external_datasets/libritts-r/test-clean/")
+                line = line.replace("./test-other/", "external_datasets/libritts-r/test-other/")
+                line = line.replace("./dev-clean/", "external_datasets/libritts-r/dev-clean/")
+                line = line.replace("./dev-other/", "external_datasets/libritts-r/dev-other/")
                 ignored[line.strip()] = True
 
     # Load vctk corpus
-    for file in (glob.glob("external_datasets/libritts-r-clean-100/*/*/*.wav") + glob.glob("external_datasets/libritts-r-clean-360/*/*/*.wav")):
+    files_index = []
+    for c in collections:
+        files_index += glob.glob(f"external_datasets/{c}/*/*/*.wav")
+    for file in files_index:
         p = Path(file)
         filename = p.name
         directory = p.parent
@@ -178,7 +194,8 @@ def execute_run():
     # Indexing files
     print("Build file index...")
     collections = {}
-    collections['libritts'] = load_libritts_corpus()
+    collections['libritts'] = load_libritts_corpus(["libritts-r-clean-100", "libritts-r-clean-360"])
+    collections['eval'] = load_libritts_corpus(["libritts-r/test-clean"])
     collections['vctk'] = load_vctk_corpus()
     # collections['common-voice-en'] = load_common_voice_corpus("external_datasets/common-voice-16.0-en/en")
     # collections['common-voice-ru'] = load_common_voice_corpus("external_datasets/common-voice-16.0-ru/ru")

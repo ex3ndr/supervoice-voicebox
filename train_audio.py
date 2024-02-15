@@ -31,7 +31,7 @@ from supervoice.tensors import count_parameters, probability_binary_mask, drop_u
 from utils.dataset import get_aligned_dataset_loader, get_aligned_dataset_dumb_loader
 
 # Train parameters
-train_experiment = "audio_large_common"
+train_experiment = "audio_large_begin_end"
 train_project="supervoice-audio"
 train_datasets = ["libritts", "vctk"]
 train_pretraining_filelist = './datasets/list_pretrain.csv'

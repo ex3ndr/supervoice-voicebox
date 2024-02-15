@@ -14,12 +14,14 @@ import textgrid
 
 class AudioFileListDataset(torch.utils.data.Dataset):
     
-    def __init__(self, path, segment_size, transformer = None):
+    def __init__(self, path, segment_size, limit=None, transformer = None):
         self.segment_size = segment_size
         self.transformer = transformer
         with open(path, 'r') as filelist:
             self.rows = list(filelist)
         random.shuffle(self.rows)
+        if limit is not None:
+            self.rows = self.rows[:limit]
     
     def __getitem__(self, index):
 
@@ -28,7 +30,7 @@ class AudioFileListDataset(torch.utils.data.Dataset):
         filename, length = r.split(',')
 
         # Load audio
-        audio = torch.load(filename[:-3] + "pt").transpose(0, 1)
+        audio = torch.load(filename[:-3] + "pt", map_location="cpu").transpose(0, 1)
 
         # Pad or trim to target duration
         if audio.shape[0] >= self.segment_size:
@@ -175,23 +177,25 @@ def prepare_textgrid_alignments(tg, total_duration, phoneme_duration):
     # Convert to discreete
     x = continious_phonemes_to_discreete(x, phoneme_duration)
 
+    # Trim empty
+    x = [i for i in x if i[1] > 0]
+
     # Pad with silence
     total_length = sum([i[1] for i in x])
     assert total_length <= total_duration # We don't have reverse in our datasets
     if total_length < total_duration:
         x += [('<SIL>', total_duration - total_length)]
-
     assert total_length >= 2 # We expect at least two tokens
 
     # Patch first token
     if x[0][1] == 1:
-        x[0][0] = '<BEGIN>'
+        x[0] = ('<BEGIN>', 1)
     else:
         x = [('<BEGIN>', 1), (x[0][0], x[0][1] - 1)] + x[1:]
 
     # Patch last token
     if x[-1][1] == 1:
-        x[-1][0] = '<END>'
+        x[-1] = ('<END>', 1)
     else:
         x = x[:-1] + [(x[-1][0], x[-1][1] - 1), ('<END>', 1)]
 
@@ -225,37 +229,6 @@ def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer
     # Sort two lists by length together
     tg, files = zip(*sorted(zip(tg, files), key=lambda x: (-x[0].maxTime, x[1])))
 
-    # Text grid extraction
-    def extract_textgrid(src):
-
-        # Prepare
-        tokens = src[1]
-        time = 0
-        output_tokens = []
-        output_durations = []
-
-        # Iterate over tokens
-        for t in tokens:
-
-            # Resolve durations
-            ends = t.maxTime
-            duration = math.floor((ends - time) / phoneme_duration)
-            time = ends
-
-            # Resolve token
-            tok = t.mark
-            if tok == '':
-                tok = tokenizer.silence_token
-            if tok == 'spn':
-                tok = tokenizer.unknown_token
-
-            # Apply
-            output_tokens.append(tok)
-            output_durations.append(duration)
-
-        # Outputs
-        return output_tokens, output_durations
-
     class AlignedDataset(torch.utils.data.Dataset):
         def __init__(self, textgrid, files):
             self.files = files
@@ -274,6 +247,8 @@ def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer
             for t in aligned_phonemes:
                 for i in range(t[1]):
                     phonemes.append(t[0])
+            if len(phonemes) != audio.shape[0]:
+                raise Exception("Phonemes and audio length mismatch: " + str(len(phonemes)) + " != " + str(audio.shape[0]) + " in " + self.files[index])
 
             # Length
             l = len(phonemes)
@@ -331,6 +306,14 @@ def get_aligned_dataset_dumb_loader(path, max_length, workers, batch_size, token
 
     # Loader
     return DataLoader(dataset, num_workers=workers, shuffle=False, batch_size=batch_size, pin_memory=True)
+
+def get_audio_spectogram_loader(path, max_length, workers, batch_size, limit = None, dtype = None):
+
+    # Dataset
+    dataset = AudioFileListDataset(path, max_length, limit=limit)
+
+    # Loader
+    return DataLoader(dataset, num_workers=workers, shuffle=False, batch_size=batch_size, pin_memory=False)
 
 
 def get_phonemes_dataset(path, max_length, workers, batch_size, tokenizer, phoneme_duration, dtype = None):
