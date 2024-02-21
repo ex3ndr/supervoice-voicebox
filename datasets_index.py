@@ -36,6 +36,8 @@ def main():
         with open("./datasets/" + op[0] + ".csv", "w") as filelist:
             for file in sorted_files:
                 filelist.write(file[0] + "," + str(file[1]) + "\n")
+
+    # Calculate mixture
                 
 
 if __name__ == "__main__":

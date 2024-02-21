@@ -1,7 +1,6 @@
 import torch
 from .model_audio import AudioPredictor
 from .model_duration import DurationPredictor
-from .model_vocoder import Generator
 from .tokenizer import Tokenizer
 from phonemizer.backend import EspeakBackend
 from phonemizer.punctuation import Punctuation
@@ -21,12 +20,12 @@ class SuperVoice(torch.nn.Module):
         self.duration_model = DurationPredictor(config)
 
         # Create vocoder
-        self.vocoder = Generator(config)
+        self.vocoder = torch.hub.load(repo_or_dir='ex3ndr/supervoice-vocoder', model='bigvsan')
 
         # Create phonemizer
         self.phonemizer = EspeakBackend('en-us')
 
-    def tts(self, text, steps = 4):
+    def tts(self, text, speed = 1, steps = 4):
 
         # Clean up text
         text = Punctuation(';:,.!"?()-').remove(text)
@@ -45,9 +44,11 @@ class SuperVoice(torch.nn.Module):
                 tokens.append(t)
 
         # Tokenize
+        print(tokens)
         map_tokens = {
             'aɪ': 'aj',
             'oʊ': 'ow',
+            'aʊ': 'aw',
             'uː': 'ʉː',
             'ɔ': 'ɒ',
             'ʌ': 'ɑː',
@@ -55,7 +56,8 @@ class SuperVoice(torch.nn.Module):
             'eɪ': 'ej',
             'iə': 'ə',
             'ɛɹ': 'ɛ',
-            'ɜː': 'ə'
+            'ɜː': 'ə',
+            't': 'tʰ',
         }
         tokens = [map_tokens[t] if t in map_tokens else t for t in tokens]
         tokens = self.tokenizer(tokens)
@@ -65,7 +67,8 @@ class SuperVoice(torch.nn.Module):
             duration = self.duration_model(
                 tokens = tokens.unsqueeze(0),
                 durations = torch.zeros(tokens.shape[0]).unsqueeze(0),
-                mask = torch.ones(tokens.shape[0]).bool().unsqueeze(0)
+                mask = torch.ones(tokens.shape[0]).bool().unsqueeze(0),
+                speed = speed
             )
 
         # Prepare token tensor
@@ -76,13 +79,15 @@ class SuperVoice(torch.nn.Module):
         tokens_t = torch.tensor(tokens_t)
 
         # Append silence
-        tokens_t = torch.nn.functional.pad(tokens_t, (5, 5))
+        tokens_t = torch.nn.functional.pad(tokens_t, (1, 1))
+        tokens_t[0] = self.tokenizer.begin_token_id
+        tokens_t[-1] = self.tokenizer.end_token_id
 
         # Predict audio
         with torch.no_grad():
             spectogram, _ = self.audio_model.sample(
                 tokens = tokens_t, 
-                audio = torch.zeros((tokens_t.shape[0], 80)),  # Empty source audio
+                audio = torch.zeros((tokens_t.shape[0], 100)),  # Empty source audio
                 mask = torch.ones((tokens_t.shape[0])).bool(), # Mask everything
                 steps = steps
             )

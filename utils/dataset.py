@@ -169,7 +169,7 @@ def extract_textgrid_alignments(tg):
         output.append((tok, t.minTime, t.maxTime))
     return output
 
-def prepare_textgrid_alignments(tg, total_duration, phoneme_duration):
+def prepare_textgrid_alignments(tg, total_duration, phoneme_duration, stop_tokens = True):
 
     # Extract alignments
     x = extract_textgrid_alignments(tg)
@@ -187,17 +187,18 @@ def prepare_textgrid_alignments(tg, total_duration, phoneme_duration):
         x += [('<SIL>', total_duration - total_length)]
     assert total_length >= 2 # We expect at least two tokens
 
-    # Patch first token
-    if x[0][1] == 1:
-        x[0] = ('<BEGIN>', 1)
-    else:
-        x = [('<BEGIN>', 1), (x[0][0], x[0][1] - 1)] + x[1:]
+    if stop_tokens:
+        # Patch first token
+        if x[0][1] == 1:
+            x[0] = ('<BEGIN>', 1)
+        else:
+            x = [('<BEGIN>', 1), (x[0][0], x[0][1] - 1)] + x[1:]
 
-    # Patch last token
-    if x[-1][1] == 1:
-        x[-1] = ('<END>', 1)
-    else:
-        x = x[:-1] + [(x[-1][0], x[-1][1] - 1), ('<END>', 1)]
+        # Patch last token
+        if x[-1][1] == 1:
+            x[-1] = ('<END>', 1)
+        else:
+            x = x[:-1] + [(x[-1][0], x[-1][1] - 1), ('<END>', 1)]
 
     return x
 

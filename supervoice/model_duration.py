@@ -32,7 +32,7 @@ class DurationPredictor(torch.nn.Module):
         # Prediction
         self.prediction = torch.nn.Linear(self.config.n_dim, 1)
 
-    def forward(self, *, tokens, durations, mask, target = None):
+    def forward(self, *, tokens, durations, mask, target = None, speed = 1):
 
         #
         # Prepare
@@ -72,7 +72,7 @@ class DurationPredictor(torch.nn.Module):
         output = self.transformer(output)
 
         # Predict durations
-        output_log = self.prediction(output)
+        output_log = self.prediction(output) * speed
 
         #
         # Output

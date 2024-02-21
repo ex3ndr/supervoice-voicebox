@@ -32,9 +32,9 @@ from utils.dataset import get_audio_spectogram_loader
 # Train parameters
 train_experiment = "vae_simple"
 train_project="supervoice-vae"
-train_auto_resume = False
-train_batch_size = 5000 # Per GPU
-train_grad_accum_every = 1
+train_auto_resume = True
+train_batch_size = 128 # Per GPU
+train_grad_accum_every = 8
 train_steps = 600000
 train_loader_workers = 16
 train_log_every = 1
@@ -158,10 +158,13 @@ def main():
                 with accelerator.autocast():
 
                     # Load batch
-                    spectogram = next(train_cycle)
+                    spec = next(train_cycle)
+
+                    # Normalize audio
+                    spec = (spec - config.audio.norm_mean) / config.audio.norm_std
 
                     # Forward
-                    loss = model(spectogram)
+                    loss = model(spec)
 
                     # Backprop
                     optim.zero_grad()
@@ -198,8 +201,8 @@ def main():
             with torch.inference_mode():      
                 model.eval()
                 losses = []
-                for test_batch in test_loader:
-                    spec = test_batch
+                for spec in test_loader:
+                    spec = (spec - config.audio.norm_mean) / config.audio.norm_std
                     loss_eval = model(spec)
                     gathered = accelerator.gather(loss_eval).cpu()
                     if len(gathered.shape) == 0:
