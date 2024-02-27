@@ -202,13 +202,18 @@ def prepare_textgrid_alignments(tg, total_duration, phoneme_duration, stop_token
 
     return x
 
-def get_aligned_dataset_loader(names, max_length, workers, batch_size, tokenizer, phoneme_duration, dtype = None):
+def get_aligned_dataset_loader(names, voices, max_length, workers, batch_size, tokenizer, phoneme_duration, dtype = None):
 
     # Load datasets
     def load_dataset(name):
         dataset_dir = "datasets/" + name + "-aligned"
         dataset_audio_dir = "datasets/" + name + "-prepared"
-        files = glob(dataset_dir + "/**/*.TextGrid")
+        if voices is None:
+            files = glob(dataset_dir + "/**/*.TextGrid")
+        else:
+            files = []
+            for voice in voices:
+                files += glob(dataset_dir + "/" + voice + "/*.TextGrid")
         files = [f[len(dataset_dir + "/"):-len(".TextGrid")] for f in files]
 
         # Load textgrids

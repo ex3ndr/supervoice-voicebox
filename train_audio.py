@@ -31,9 +31,19 @@ from supervoice.tensors import count_parameters, probability_binary_mask, drop_u
 from utils.dataset import get_aligned_dataset_loader, get_aligned_dataset_dumb_loader
 
 # Train parameters
-train_experiment = "audio_large_begin_end"
+train_experiment = "audio_large_finetune"
 train_project="supervoice-audio"
-train_datasets = ["libritts", "vctk"]
+
+# Normal training
+# train_datasets = ["libritts", "vctk"]
+# train_voices = None
+# train_source_experiment = None
+
+# Finetuning
+train_datasets = ["libritts"]
+train_voices = ["00000004"] # Male Voice
+train_source_experiment = "audio_large_begin_end"
+
 train_pretraining_filelist = './datasets/list_pretrain.csv'
 train_pretraining = False
 train_auto_resume = True
@@ -76,7 +86,7 @@ def main():
     if train_pretraining:
         train_loader = get_aligned_dataset_dumb_loader(path = train_pretraining_filelist, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
     else:
-        train_loader = get_aligned_dataset_loader(names = train_datasets, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
+        train_loader = get_aligned_dataset_loader(names = train_datasets, voices = train_voices, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
 
     # Prepare model
     accelerator.print("Loading model...")
@@ -130,9 +140,15 @@ def main():
         shutil.copyfile(fname_step, fname)
 
     # Load
-    if train_auto_resume and (output_dir / f"{train_experiment}.pt").exists():
+    source = None
+    if (output_dir / f"{train_experiment}.pt").exists():
+        source = train_experiment
+    elif train_source_experiment and (output_dir / f"{train_source_experiment}.pt").exists():
+        source = train_source_experiment
+
+    if train_auto_resume and source is not None:
         accelerator.print("Resuming training...")
-        checkpoint = torch.load(str(output_dir / f"{train_experiment}.pt"), map_location="cpu")
+        checkpoint = torch.load(str(output_dir / f"{source}.pt"), map_location="cpu")
 
         # Model
         raw_model.load_state_dict(checkpoint['model'])
