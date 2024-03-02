@@ -11,8 +11,10 @@ import csv
 from pathlib import Path
 from tqdm import tqdm
 from supervoice.audio import load_mono_audio, spectogram
+from supervoice.model_style import export_style
+from supervoice.config import config
 from utils.audio import trim_silence
-from train_config import config
+import pyworld as pw
 
 #
 # Parameters
@@ -54,6 +56,9 @@ def execute_parallel(args):
     # Spectogram
     spec = spectogram(waveform, config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.mel_norm, config.audio.mel_scale, config.audio.sample_rate)
 
+    # Calculate style tokens
+    style = export_style(config, waveform, spec)
+
     # Clean up text
     for symbol in CLEANUP_SYMBOLS:
         text = text.replace(symbol, " ")
@@ -64,6 +69,7 @@ def execute_parallel(args):
     target_dir = os.path.join(collection_dir, speaker_directory(speaker))
     torchaudio.save(os.path.join(target_dir, target_name + ".wav"), waveform.unsqueeze(0).cpu(), config.audio.sample_rate)
     torch.save(spec.cpu(), os.path.join(target_dir, target_name + ".pt"))
+    torch.save(style.cpu(), os.path.join(target_dir, target_name + ".style.pt"))
     with open(os.path.join(target_dir, target_name + ".txt"), "w", encoding="utf-8") as f:
         f.write(text)
 

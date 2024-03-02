@@ -11,6 +11,8 @@ import json
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import textgrid
+from supervoice.model_style import resolve_style
+from supervoice.config import config
 
 class AudioFileListDataset(torch.utils.data.Dataset):
     
@@ -169,7 +171,7 @@ def extract_textgrid_alignments(tg):
         output.append((tok, t.minTime, t.maxTime))
     return output
 
-def prepare_textgrid_alignments(tg, total_duration, phoneme_duration, stop_tokens = True):
+def prepare_textgrid_alignments(tg, style, total_duration, phoneme_duration, stop_tokens = True):
 
     # Extract alignments
     x = extract_textgrid_alignments(tg)
@@ -187,18 +189,23 @@ def prepare_textgrid_alignments(tg, total_duration, phoneme_duration, stop_token
         x += [('<SIL>', total_duration - total_length)]
     assert total_length >= 2 # We expect at least two tokens
 
+    # Style tokens
+    y = resolve_style(config, style, [i[1] for i in x])
+    x = [(xi[0], xi[1], yi + 1) for xi, yi in zip(x, y)]
+
+    # Apply begin/end tokens
     if stop_tokens:
         # Patch first token
         if x[0][1] == 1:
-            x[0] = ('<BEGIN>', 1)
+            x[0] = ('<BEGIN>', 1, 0)
         else:
-            x = [('<BEGIN>', 1), (x[0][0], x[0][1] - 1)] + x[1:]
+            x = [('<BEGIN>', 1, 0), (x[0][0], x[0][1] - 1, x[0][2])] + x[1:]
 
         # Patch last token
         if x[-1][1] == 1:
-            x[-1] = ('<END>', 1)
+            x[-1] = ('<END>', 1, 0)
         else:
-            x = x[:-1] + [(x[-1][0], x[-1][1] - 1), ('<END>', 1)]
+            x = x[:-1] + [(x[-1][0], x[-1][1] - 1, x[-1][2]), ('<END>', 1, 0)]
 
     return x
 
@@ -219,25 +226,31 @@ def get_aligned_dataset_loader(names, voices, max_length, workers, batch_size, t
         # Load textgrids
         tg = [textgrid.TextGrid.fromFile(dataset_dir + "/" + f + ".TextGrid") for f in tqdm(files)]
 
+        # Style tokens
+        styles = [dataset_audio_dir + "/" + f + ".style.pt" for f in files]
+
         # Load audio
         files = [dataset_audio_dir + "/" + f + ".pt" for f in files]
 
-        return tg, files
+        return tg, files, styles
 
     # Load all datasets
     files = []
     tg = []
+    styles = []
     for name in names:
-        t, f = load_dataset(name)
+        t, f, s = load_dataset(name)
         files += f
         tg += t
+        styles += s
 
     # Sort two lists by length together
-    tg, files = zip(*sorted(zip(tg, files), key=lambda x: (-x[0].maxTime, x[1])))
+    tg, files, styles = zip(*sorted(zip(tg, files, styles), key=lambda x: (-x[0].maxTime, x[1])))
 
     class AlignedDataset(torch.utils.data.Dataset):
-        def __init__(self, textgrid, files):
+        def __init__(self, textgrid, files, styles):
             self.files = files
+            self.styles = styles
             self.textgrid = textgrid
         def __len__(self):
             return len(self.files)        
@@ -247,12 +260,19 @@ def get_aligned_dataset_loader(names, voices, max_length, workers, batch_size, t
             audio = torch.load(self.files[index])
             audio = audio.transpose(0, 1) # Reshape audio (C, T) -> (T, C)
 
+            # Styles
+            style = torch.load(self.styles[index])
+
             # Phonemes
-            aligned_phonemes = prepare_textgrid_alignments(self.textgrid[index], audio.shape[0], phoneme_duration)
+            aligned_phonemes = prepare_textgrid_alignments(self.textgrid[index], style, audio.shape[0], phoneme_duration)
+
+            # Unwrap phonemes
             phonemes = []
+            styles = []
             for t in aligned_phonemes:
                 for i in range(t[1]):
                     phonemes.append(t[0])
+                    styles.append(t[2])
             if len(phonemes) != audio.shape[0]:
                 raise Exception("Phonemes and audio length mismatch: " + str(len(phonemes)) + " != " + str(audio.shape[0]) + " in " + self.files[index])
 
@@ -265,20 +285,22 @@ def get_aligned_dataset_loader(names, voices, max_length, workers, batch_size, t
         
             # Cut to size
             phonemes = phonemes[offset:offset+l]
+            styles = styles[offset:offset+l]
             audio = audio[offset:offset+l]
 
             # Tokenize
             phonemes = tokenizer(phonemes)
+            styles = torch.tensor(styles).long()
 
             # Cast
             if dtype is not None:
                 audio = audio.to(dtype)
 
             # Outputs
-            return phonemes, audio
+            return phonemes, styles, audio
 
     # Create dataset
-    dataset = AlignedDataset(tg, files)
+    dataset = AlignedDataset(tg, files, styles)
 
     def collate_to_shortest(batch):
 
@@ -292,14 +314,16 @@ def get_aligned_dataset_loader(names, voices, max_length, workers, batch_size, t
                 offset = random.randint(0, b[0].shape[0] - min_len)
                 padded.append((
                     b[0][offset:offset + min_len],
-                    b[1][offset:offset + min_len]
+                    b[1][offset:offset + min_len],
+                    b[2][offset:offset + min_len]
                 ))
             else:
                 padded.append((
                     b[0],
-                    b[1]
+                    b[1],
+                    b[2]
                 ))
-        return torch.stack([b[0] for b in padded]), torch.stack([b[1] for b in padded])
+        return torch.stack([b[0] for b in padded]), torch.stack([b[1] for b in padded]), torch.stack([b[2] for b in padded])
 
     return DataLoader(dataset, num_workers=workers, shuffle=False, batch_size=batch_size, pin_memory=True, collate_fn=collate_to_shortest)
 
