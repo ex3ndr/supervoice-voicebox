@@ -31,7 +31,7 @@ from supervoice.tensors import count_parameters, probability_binary_mask, drop_u
 from utils.dataset import get_aligned_dataset_loader, get_aligned_dataset_dumb_loader
 
 # Train parameters
-train_experiment = "audio_pitch"
+train_experiment = "audio_pitch2"
 train_project="supervoice-audio"
 
 # Normal training
@@ -208,16 +208,21 @@ def main():
                     # Drop audio (but not tokens) depending on mask
                     audio = drop_using_mask(source = audio, replacement = 0, mask = mask)
 
+                    # 0.4 probability of dropping unmasked tokens to condition on audio only
+                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device).unsqueeze(-1) * ~mask
+                    tokens = drop_using_mask(source = tokens, replacement = 0, mask = conditional_drop_mask)
+                    style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
+
+                    # 0.2 probability of dropping style tokens
+                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
+                    style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
+
                     # 0.2 probability of dropping everything
                     conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
                     audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
                     tokens = drop_using_mask(source = tokens, replacement = 0, mask = conditional_drop_mask)
                     style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
                     mask = drop_using_mask(source = mask, replacement = 1, mask = conditional_drop_mask)
-
-                    # 0.4 probability of dropping style tokens
-                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.4, device = device)
-                    style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
 
                     # Train step
                     predicted, loss = model(

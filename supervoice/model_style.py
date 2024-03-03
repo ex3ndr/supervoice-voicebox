@@ -12,6 +12,12 @@ def export_style(config, waveform, spec):
 def resolve_style(config, src, durations):
     res = []
     offset = 0
+    
+    # Convert to log scale and normalize
+    normalized_src = src
+    normalized_src = torch.log(normalized_src + 1)
+    normalized_src = torch.clamp(normalized_src, config.tokenizer_style.pitch_min, config.tokenizer_style.pitch_max)
+
     for i in range(len(durations)):
 
         # Calculate start and end
@@ -19,7 +25,7 @@ def resolve_style(config, src, durations):
         end = round(offset + durations[i])
 
         # Calculate pitch
-        value = src[start:end].mean().item()
+        value = normalized_src[start:end].mean().item()
         value = ((value - config.tokenizer_style.pitch_min) / (config.tokenizer_style.pitch_max - config.tokenizer_style.pitch_min)) * config.tokenizer_style.tokens
         value = max(0, min(config.tokenizer_style.tokens - 1, int(value)))
 
