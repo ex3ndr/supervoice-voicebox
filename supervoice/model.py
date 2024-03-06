@@ -1,102 +1,220 @@
 import torch
+import textgrid
 from .model_audio import AudioPredictor
-from .model_duration import DurationPredictor
+from .model_style import export_style, resolve_style
+from .audio import resampler, spectogram, load_mono_audio
 from .tokenizer import Tokenizer
-from phonemizer.backend import EspeakBackend
-from phonemizer.punctuation import Punctuation
-from phonemizer.separator import Separator
+from .tensors import drop_using_mask
+from .alignment import compute_alignments
 
 class SuperVoice(torch.nn.Module):
-    def __init__(self, config):
+
+    def __init__(self, config, audio_predictor, vocoder):
         super(SuperVoice, self).__init__()
-
-        # Create Tokenizer
+        self.config = config
         self.tokenizer = Tokenizer(config)
+        self.audio_model = audio_predictor
+        self.vocoder = vocoder
 
-        # Create Audio Model
-        self.audio_model = AudioPredictor(config)
-
-        # Create Duration Model
-        self.duration_model = DurationPredictor(config)
-
-        # Create vocoder
-        self.vocoder = torch.hub.load(repo_or_dir='ex3ndr/supervoice-vocoder', model='bigvsan')
-
-        # Create phonemizer
-        self.phonemizer = EspeakBackend('en-us')
-
-    def tts(self, text, speed = 1, steps = 4):
-
-        # Clean up text
-        text = Punctuation(';:,.!"?()-').remove(text)
-        words = [w.lower() for w in text.strip().split(' ') if w]
-        separator = Separator(phone='|', word=' ')
-
-        # Phonemize
-        phonemized = self.phonemizer.phonemize(words, separator = separator, strip = True)
-        tokens = []
-        first = True
-        for p in phonemized:
-            if not first:
-                tokens.append(self.tokenizer.silence_token)
-            first = False
-            for t in p.split('|'):
-                tokens.append(t)
-
-        # Tokenize
-        print(tokens)
-        map_tokens = {
-            'aɪ': 'aj',
-            'oʊ': 'ow',
-            'aʊ': 'aw',
-            'uː': 'ʉː',
-            'ɔ': 'ɒ',
-            'ʌ': 'ɑː',
-            'əl': 'ə',
-            'eɪ': 'ej',
-            'iə': 'ə',
-            'ɛɹ': 'ɛ',
-            'ɜː': 'ə',
-            't': 'tʰ',
-        }
-        tokens = [map_tokens[t] if t in map_tokens else t for t in tokens]
-        tokens = self.tokenizer(tokens)
-
-        # Predict duration
-        with torch.no_grad():
-            duration = self.duration_model(
-                tokens = tokens.unsqueeze(0),
-                durations = torch.zeros(tokens.shape[0]).unsqueeze(0),
-                mask = torch.ones(tokens.shape[0]).bool().unsqueeze(0),
-                speed = speed
-            )
-
-        # Prepare token tensor
-        tokens_t = []
-        for (t, d) in zip(tokens.tolist(), duration.squeeze(0).tolist()):
-            for i in range(d):
-                tokens_t.append(t)
-        tokens_t = torch.tensor(tokens_t)
-
-        # Append silence
-        tokens_t = torch.nn.functional.pad(tokens_t, (1, 1))
-        tokens_t[0] = self.tokenizer.begin_token_id
-        tokens_t[-1] = self.tokenizer.end_token_id
-
-        # Predict audio
-        with torch.no_grad():
-            spectogram, _ = self.audio_model.sample(
-                tokens = tokens_t, 
-                audio = torch.zeros((tokens_t.shape[0], 100)),  # Empty source audio
-                mask = torch.ones((tokens_t.shape[0])).bool(), # Mask everything
-                steps = steps
-            )
+    def load_prompt(self, audio, alignments):
+        """
+        Load a prompt from audio and textgrid alignments
+        """
         
-        # Rescale spectogram
-        spectogram = (spectogram * 2.2615) + (-5.8843)
+        # Load arguments
+        if type(audio) is str:
+            audio = load_mono_audio(audio, sample_rate = self.config.audio.sample_rate)
+            audio = audio.to(self._device())
+        if type(alignments) is str:
+            alignments = textgrid.TextGrid.fromFile(alignments)
+
+        # Create spectogram
+        spec = self._do_spectogram(audio)
+
+        # Create style
+        style = export_style(self.config, audio, spec)
+
+        # Calculate alignments
+        alignments = compute_alignments(self.config, alignments, style, spec.shape[0])
+
+        # Load phonemes and styles
+        phonemes = []
+        styles = []
+        for t in alignments:
+            for i in range(t[1]):
+                phonemes.append(t[0]) # Already padded by default
+                styles.append(t[2] + 1) # Style tokens are not padded by default
+        tokens = self.tokenizer(phonemes).long()
+        styles = torch.tensor(styles).long()
+
+        # Create text prompt
+        text_prompt = self.create_text_prompt(tokens, styles, spec.shape[0])
+
+        # Create audio prompt
+        audio_prompt = self._audio_normalize(spec)
+
+        # Return prompt
+        return (audio_prompt, text_prompt)
+
+    
+    def create_text_prompt(self, tokens = None, token_styles = None, count = None):
+        """
+        Create a text prompt from token values and styles
+        """
+
+        # Resolve count
+        C = None
+        if tokens is not None:
+            C = tokens.shape[0]
+        if token_styles is not None:
+            if C is not None and C != token_styles.shape[0]:
+                raise ValueError("All inputs must have the same length")
+            C = token_styles.shape[0]
+        if count is not None:
+            if C is not None and C != count:
+                raise ValueError("All inputs must have the same length")
+            C = count
+        
+        # Create tokens if is not provided
+        if tokens is None:
+            tokens = torch.zeros(C, device = self._device()).long()
+        
+        # Create token styles if is not provided
+        if token_styles is None:
+            token_styles = torch.zeros(C, device = self._device()).long()
+
+        # Return prompt
+        return (tokens, token_styles)
+
+    def create_audio_prompt(self, waveform, sample_rate = None, tokens = None, token_styles = None):
+        """
+        Create a prompt from raw waveform, optionally providing tokens and token styles.
+        """
+        device = self._device()
+        waveform = waveform.to(device)
+
+        # Resample if needed
+        if sample_rate is not None and sample_rate != self.config.audio.sample_rate:
+            waveform = resampler(sample_rate, self.config.audio.sample_rate, device)(waveform)
+
+        # Create spectogram
+        spec = self._do_spectogram(waveform)
+        C = spec.shape[0]
+
+        # Create text prompt
+        text_prompt = create_text_prompt(tokens, token_styles, C)
+
+        # Create audio prompt
+        audio_prompt = self._audio_normalize(spec)
+
+        # Return prompt
+        return (audio_prompt, text_prompt)
+
+    def restore_segment(self, prompt, interval, steps = 4, alpha = None):
+        """
+        Restore segment of a source audio prompt
+        """
+
+        # Unpack prompt
+        (audio, (tokens, token_styles)) = prompt
+        seq_len = audio.shape[0]
+        device = self._device()
+        audio = audio.to(device)
+        tokens = tokens.to(device)
+        token_styles = token_styles.to(device)
+
+        # Normalize interval
+        phoneme_duration = self.config.audio.hop_size / self.config.audio.sample_rate
+        start = round(interval[0] // phoneme_duration)
+        end = round(interval[1] // phoneme_duration)
+        start = min(max(0, start), seq_len - 1)
+        end = min(max(0, end), seq_len - 1)
+        print(start, end, seq_len)
+
+        # Create mask
+        mask = torch.zeros((seq_len)).bool().to(device)
+        mask[start:end] = True
+
+        # Drop audio that need to be restored
+        audio = drop_using_mask(audio, 0, mask)
+
+        # Restore audio
+        with torch.no_grad():
+            restored, _ = self.audio_model.sample(tokens = tokens, tokens_style = token_styles, audio = audio, mask = mask, steps = steps, alpha = alpha)
+        restored = self._audio_denormalize(restored)
 
         # Vocoder
         with torch.no_grad():
-            audio = self.vocoder(spectogram.transpose(1,0).unsqueeze(0)).squeeze(0)
+            waveform = self.vocoder.generate(restored.transpose(1, 0)).squeeze(0)
+
+        # Return restored audio
+        return waveform
+
+    def synthesize(self, prompt, condition = None, steps = 4, alpha = 0.5):
         
-        return spectogram, audio
+        # Unpack prompt
+        (tokens, token_styles) = prompt
+        (tokens, token_styles) = self.create_text_prompt(tokens, token_styles) # Normalize inputs
+        device = self._device()
+        tokens = tokens.to(device)
+        token_styles = token_styles.to(device)
+
+        # Handle conditioning
+        target_pad_begin = 1
+        target_pad_end = 1
+        if condition is not None:
+            (cond_audio, (cond_tokens, cond_token_styles)) = condition
+            target_pad_begin = cond_audio.shape[0]
+
+            # Prepare audio
+            audio = torch.cat([cond_audio, torch.zeros(tokens.shape[0] + 1, self.config.audio.n_mels, device=device)])
+
+            # Prepare tokens
+            tokens = torch.cat([cond_tokens, tokens, torch.tensor([self.tokenizer.end_token_id], device = device)])
+            tokens[0] = self.tokenizer.begin_token_id
+
+            # Prepare token styles
+            token_styles = torch.cat([cond_token_styles, token_styles, torch.tensor([0], device = device)])
+            token_styles[0] = 0
+
+            # Prepare mask
+            mask = torch.zeros((tokens.shape[0])).bool().to(device)
+            mask[target_pad_begin:-target_pad_end] = True
+
+        else:
+            # Add begin/end tokens
+            tokens = torch.cat([torch.tensor([self.tokenizer.begin_token_id], device = device), tokens, torch.tensor([self.tokenizer.end_token_id], device = device)])
+            token_styles = torch.cat([torch.tensor([0], device = device), token_styles, torch.tensor([0], device = device)])
+
+            # Create empty audio and mask
+            audio = torch.zeros((tokens.shape[0], self.config.audio.n_mels)).to(device)
+            mask = torch.ones((tokens.shape[0])).bool().to(device)
+
+        # Restore audio
+        with torch.no_grad():
+            restored, _ = self.audio_model.sample(tokens = tokens, tokens_style = token_styles, audio = audio, mask = mask, steps = steps, alpha = alpha)
+        restored = self._audio_denormalize(restored)
+
+         # Vocoder
+        with torch.no_grad():
+            waveform = self.vocoder.generate(restored[target_pad_begin:-target_pad_end].transpose(1, 0)).squeeze(0)
+
+        # Return synthesized audio
+        return waveform
+
+    def _do_spectogram(self, waveform):
+        return spectogram(waveform, self.config.audio.n_fft, self.config.audio.n_mels, self.config.audio.hop_size, self.config.audio.win_size, self.config.audio.mel_norm, self.config.audio.mel_scale, self.config.audio.sample_rate).transpose(1, 0)
+    
+    def _audio_normalize(self, src):
+        return (src - self.config.audio.norm_mean) / self.config.audio.norm_std
+
+    def _audio_denormalize(self, src):
+        return (src * self.config.audio.norm_std) + self.config.audio.norm_mean
+
+    def _device(self):
+        return next(self.parameters()).device
+
+    def _load_style(self, wav, spec, durations):
+        style = export_style(self.config, wav, spec)
+        style = resolve_style(self.config, style, durations)
+        return style
