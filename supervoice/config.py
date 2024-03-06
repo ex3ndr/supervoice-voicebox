@@ -26,8 +26,8 @@ config = dict_to_object({
 
     # Style tokenizer
     "tokenizer_style": {
-        "pitch_min": 0,
-        "pitch_max": 7,
+        "pitch_min": -2,
+        "pitch_max": 2,
         "tokens": 256
     },
 

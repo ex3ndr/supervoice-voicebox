@@ -13,14 +13,14 @@ from tqdm import tqdm
 from supervoice.audio import load_mono_audio, spectogram
 from supervoice.model_style import export_style
 from supervoice.config import config
-from utils.audio import trim_silence
+from utils.audio import trim_silence, improve_audio, dowload_enhancer
 import pyworld as pw
 
 #
 # Parameters
 #
 
-PARAM_WORKERS = max(torch.cuda.device_count() * 4, 8)
+PARAM_WORKERS = max(torch.cuda.device_count() * 4, 4)
 
 CLEANUP_SYMBOLS = [
     "\n",
@@ -39,9 +39,10 @@ def speaker_directory(speaker):
     return str(speaker).zfill(8)
 
 def execute_parallel(args):
+    process_id = multiprocessing.current_process()._identity[0]
     files, vad, collection_dir, index = args
     file, text, speaker = files[index]
-    device = "cuda:" + str(index % torch.cuda.device_count())
+    device = "cuda:" + str(process_id % torch.cuda.device_count())
 
     # Format filename from index (e.g. 000001)
     target_name = str(index).zfill(8)
@@ -52,6 +53,9 @@ def execute_parallel(args):
     # Trim silence
     if vad:
         waveform = trim_silence(waveform, config.audio.sample_rate)
+
+    # Enhance audio
+    # waveform = improve_audio(waveform, config.audio.sample_rate)
 
     # Spectogram
     spec = spectogram(waveform, config.audio.n_fft, config.audio.n_mels, config.audio.hop_size, config.audio.win_size, config.audio.mel_norm, config.audio.mel_scale, config.audio.sample_rate)
@@ -196,6 +200,8 @@ def load_common_voice_corpus(path):
     return { 'files': files, 'speakers': speakers, 'vad': True }
 
 def execute_run():
+    torch.multiprocessing.set_start_method('spawn')
+    # dowload_enhancer()
 
     # Indexing files
     print("Build file index...")

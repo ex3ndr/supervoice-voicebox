@@ -31,7 +31,7 @@ from supervoice.tensors import count_parameters, probability_binary_mask, drop_u
 from utils.dataset import get_aligned_dataset_loader, get_aligned_dataset_dumb_loader
 
 # Train parameters
-train_experiment = "audio_pitch2"
+train_experiment = "audio_pitch3"
 train_project="supervoice-audio"
 
 # Normal training
@@ -54,8 +54,8 @@ train_loader_workers = 8
 train_log_every = 1
 train_save_every = 1000
 train_watch_every = 1000
-train_evaluate_every = 200
-train_evaluate_batches = 10
+train_evaluate_every = 1
+train_evaluate_batch_size = 10
 train_max_segment_size = 500
 train_lr_start = 1e-7
 train_lr_max = 2e-5
@@ -88,6 +88,7 @@ def main():
         train_loader = get_aligned_dataset_dumb_loader(path = train_pretraining_filelist, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
     else:
         train_loader = get_aligned_dataset_loader(names = train_datasets, voices = train_voices, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
+    test_loader = get_aligned_dataset_loader(names = ["eval"], voices = None, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_evaluate_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
 
     # Prepare model
     accelerator.print("Loading model...")
@@ -102,8 +103,10 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = train_steps)
 
     # Accelerate
-    model, optim, train_loader = accelerator.prepare(model, optim, train_loader)
+    model, optim, train_loader, test_loader = accelerator.prepare(model, optim, train_loader, test_loader)
     train_cycle = cycle(train_loader)
+    test_cycle = cycle(test_loader)
+    test_batch = next(test_cycle)
     hps = {
         "segment_size": train_max_segment_size, 
         "train_lr_start": train_lr_start, 
@@ -260,6 +263,19 @@ def main():
 
         return loss, predicted, flow, total, lr
 
+    # def train_eval():
+    #     model.eval()
+    #     with torch.inference_mode():
+    #         tokens, style, audio = test_batch
+    #         audio = (audio - config.audio.norm_mean) / config.audio.norm_std
+    #         mask = torch.tokens(audio, device = device)
+    #         predicted = model.sample(tokens = tokens, tokens_style = style, audio = audio, mask = mask)
+    #         score = evaluate_mos(predicted, config.audio.sample_rate)
+    #         gathered_score = accelerator.gather(score).cpu()
+    #         if len(gathered_score.shape) == 0:
+    #             gathered_score = gathered_score.unsqueeze(0)
+    #         return gathered_score.mean().item()
+
     #
     # Start Training
     #
@@ -290,6 +306,13 @@ def main():
                 "speed": speed
             }, step=step)
             accelerator.print(f'Step {step}: loss={loss}, lr={lr}, time={end - start} sec, it/s={speed}')
+        
+        # Evaluate
+        # if step % train_evaluate_every == 0:
+        #     accelerator.print("Evaluating...")
+        #     mos = train_eval()
+        #     accelerator.print(f"Step {step}: MOS={mos}")
+        #     accelerator.log({"eval/mos": mos}, step=step)
         
         # Save
         if step % train_save_every == 0 and accelerator.is_main_process:

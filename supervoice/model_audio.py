@@ -102,8 +102,16 @@ class AudioPredictor(torch.nn.Module):
             predicted_unconditioned = predicted_mix[0]
             
             # CFG prediction
-            # NOTE: One paper has a mistake in the formula and it used addition instead of subtraction
-            prediction = (1 + alpha) * predicted_conditioned - alpha * predicted_unconditioned
+
+            # There are different ways to do CFG, this is my very naive version, which worked for me:
+            # prediction = (1 + alpha) * predicted_conditioned - alpha * predicted_unconditioned
+
+            # Original paper uses a different one, but i found that it simply creates overexposed values
+            # prediction = predicted_unconditioned + (predicted_conditioned - predicted_unconditioned) * alpha
+
+            # This is from the latest paper that rescales original formula (https://arxiv.org/abs/2305.08891):
+            prediction = predicted_conditioned + (predicted_conditioned - predicted_unconditioned) * alpha
+            prediction_rescaled = predicted_conditioned.std() * (prediction / prediction.std())
 
             return prediction
 

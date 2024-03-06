@@ -54,7 +54,14 @@ def resampler(from_sample_rate, to_sample_rate, device=None):
     if key in resampler_cache:
         return resampler_cache[key]
     else:
-        res = T.Resample(from_sample_rate, to_sample_rate).to(device)
+        res = T.Resample(
+            from_sample_rate, 
+            to_sample_rate,
+            lowpass_filter_width=64,
+            rolloff=0.9475937167399596,
+            resampling_method="sinc_interp_kaiser",
+            beta=14.769656459379492
+        ).to(device)
         resampler_cache[key] = res
         return res
 
