@@ -42,8 +42,8 @@ class SuperVoice(torch.nn.Module):
         styles = []
         for t in alignments:
             for i in range(t[1]):
-                phonemes.append(t[0]) # Already padded by default
-                styles.append(t[2] + 1) # Style tokens are not padded by default
+                phonemes.append(t[0])
+                styles.append(t[2])
         tokens = self.tokenizer(phonemes).long()
         styles = torch.tensor(styles).long()
 
@@ -129,7 +129,6 @@ class SuperVoice(torch.nn.Module):
         end = round(interval[1] // phoneme_duration)
         start = min(max(0, start), seq_len - 1)
         end = min(max(0, end), seq_len - 1)
-        print(start, end, seq_len)
 
         # Create mask
         mask = torch.zeros((seq_len)).bool().to(device)

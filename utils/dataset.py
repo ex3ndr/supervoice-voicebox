@@ -168,48 +168,54 @@ def get_aligned_dataset_loader(names, voices, max_length, workers, batch_size, t
             return len(self.files)        
         def __getitem__(self, index):
 
-            # Spectogram
-            audio = torch.load(self.files[index])
-            audio = audio.transpose(0, 1) # Reshape audio (C, T) -> (T, C)
+            try:
 
-            # Styles
-            style = torch.load(self.styles[index])
+                # Spectogram
+                audio = torch.load(self.files[index])
+                audio = audio.transpose(0, 1) # Reshape audio (C, T) -> (T, C)
 
-            # Phonemes
-            aligned_phonemes = compute_alignments(config, self.textgrid[index], style, audio.shape[0])
+                # Styles
+                style = torch.load(self.styles[index])
 
-            # Unwrap phonemes
-            phonemes = []
-            styles = []
-            for t in aligned_phonemes:
-                for i in range(t[1]):
-                    phonemes.append(t[0])
-                    styles.append(t[2])
-            if len(phonemes) != audio.shape[0]:
-                raise Exception("Phonemes and audio length mismatch: " + str(len(phonemes)) + " != " + str(audio.shape[0]) + " in " + self.files[index])
+                # Phonemes
+                aligned_phonemes = compute_alignments(config, self.textgrid[index], style, audio.shape[0])
 
-            # Length
-            l = len(phonemes)
-            offset = 0
-            if l > max_length:
-                l = max_length
-                offset = random.randint(0, len(phonemes) - l)
+                # Unwrap phonemes
+                phonemes = []
+                styles = []
+                for t in aligned_phonemes:
+                    for i in range(t[1]):
+                        phonemes.append(t[0])
+                        styles.append(t[2])
+                if len(phonemes) != audio.shape[0]:
+                    raise Exception("Phonemes and audio length mismatch: " + str(len(phonemes)) + " != " + str(audio.shape[0]) + " in " + self.files[index])
+
+                # Length
+                l = len(phonemes)
+                offset = 0
+                if l  > max_length:
+                    l = max_length
+                    offset = random.randint(0, len(phonemes) - l)
         
-            # Cut to size
-            phonemes = phonemes[offset:offset+l]
-            styles = styles[offset:offset+l]
-            audio = audio[offset:offset+l]
+                # Cut to size
+                phonemes = phonemes[offset:offset+l]
+                styles = styles[offset:offset+l]
+                audio = audio[offset:offset+l]
 
-            # Tokenize
-            phonemes = tokenizer(phonemes)
-            styles = torch.tensor(styles).long()
+                # Tokenize
+                phonemes = tokenizer(phonemes)
+                styles = torch.tensor(styles).long()
 
-            # Cast
-            if dtype is not None:
-                audio = audio.to(dtype)
+                # Cast
+                if dtype is not None:
+                    audio = audio.to(dtype)
 
-            # Outputs
-            return phonemes, styles, audio
+                # Outputs
+                return phonemes, styles, audio
+            except Exception as e:
+                print("Error in file: " + self.files[index])
+                print(e)
+                raise e
 
     # Create dataset
     dataset = AlignedDataset(tg, files, styles)

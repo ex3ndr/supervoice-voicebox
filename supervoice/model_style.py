@@ -15,7 +15,10 @@ def resolve_style(config, src, durations):
 
     # Make continuous and normalize
     src = _convert_to_continuous_f0(src)
-    src = (src - torch.mean(src)) / torch.std(src)
+    src = (src - torch.mean(src))
+    src_std = torch.std(src)
+    if src_std != 0: # If std is zero, we will get NaNs
+        src = src / torch.std(src)
     
     # Convert to log scale and normalize
     src = torch.clamp(src, config.tokenizer_style.pitch_min, config.tokenizer_style.pitch_max)
