@@ -16,7 +16,7 @@ class SuperVoice(torch.nn.Module):
         self.audio_model = audio_predictor
         self.vocoder = vocoder
 
-    def load_prompt(self, audio, alignments):
+    def load_prompt(self, audio, alignments = None):
         """
         Load a prompt from audio and textgrid alignments
         """
@@ -35,17 +35,21 @@ class SuperVoice(torch.nn.Module):
         style = export_style(self.config, audio, spec)
 
         # Calculate alignments
-        alignments = compute_alignments(self.config, alignments, style, spec.shape[0])
+        if alignments is not None:
+            alignments = compute_alignments(self.config, alignments, style, spec.shape[0])
 
-        # Load phonemes and styles
-        phonemes = []
-        styles = []
-        for t in alignments:
-            for i in range(t[1]):
-                phonemes.append(t[0])
-                styles.append(t[2])
-        tokens = self.tokenizer(phonemes).long()
-        styles = torch.tensor(styles).long()
+            # Load phonemes and styles
+            phonemes = []
+            styles = []
+            for t in alignments:
+                for i in range(t[1]):
+                    phonemes.append(t[0])
+                    styles.append(t[2])
+            tokens = self.tokenizer(phonemes).long()
+            styles = torch.tensor(styles).long()
+        else:
+            tokens = None
+            styles = None
 
         # Create text prompt
         text_prompt = self.create_text_prompt(tokens, styles, spec.shape[0])
@@ -163,6 +167,7 @@ class SuperVoice(torch.nn.Module):
         target_pad_end = 1
         if condition is not None:
             (cond_audio, (cond_tokens, cond_token_styles)) = condition
+            (cond_tokens, cond_token_styles) = self.create_text_prompt(cond_tokens, cond_token_styles, cond_audio.shape[0]) # Normalize inputs
             target_pad_begin = cond_audio.shape[0]
 
             # Prepare audio
