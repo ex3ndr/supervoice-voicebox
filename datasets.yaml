@@ -8,3 +8,4 @@ datasets:
   - common-voice-16.0-en
   - common-voice-16.0-ru
   - common-voice-16.0-uk
+  - esd

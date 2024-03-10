@@ -27,10 +27,17 @@ def trim_silence(audio, sample_rate, padding = 0.25):
 
     # Get speech timestamps
     padding_frames = math.floor(sample_rate * padding)
-    speech_timestamps = get_speech_timestamps(audio.unsqueeze(0), model.to(audio.device), sampling_rate=sample_rate)    
+    source_audio = audio
+    scale = 1.0
+    if sample_rate != 16000:
+        source_audio = resampler(sample_rate, 16000, device = audio.device)(source_audio)
+        scale = sample_rate / 16000
+    speech_timestamps = get_speech_timestamps(source_audio.unsqueeze(0), model.to(audio.device), sampling_rate=16000)
+
+    # Trim silence
     if len(speech_timestamps) > 0:
-        voice_start = speech_timestamps[0]['start'] - padding_frames
-        voice_end = speech_timestamps[-1]['end'] + padding_frames
+        voice_start = round(speech_timestamps[0]['start'] * scale) - padding_frames
+        voice_end = round(speech_timestamps[-1]['end'] * scale) + padding_frames
         voice_start = max(0, voice_start)
         voice_end = min(len(audio), voice_end)
         audio = audio[voice_start:voice_end]
