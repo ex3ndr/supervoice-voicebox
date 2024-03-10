@@ -29,6 +29,7 @@ class SuperVoice(torch.nn.Module):
             alignments = textgrid.TextGrid.fromFile(alignments)
 
         # Create spectogram
+        audio = audio.to(self._device())
         spec = self._do_spectogram(audio)
 
         # Create style
@@ -45,8 +46,8 @@ class SuperVoice(torch.nn.Module):
                 for i in range(t[1]):
                     phonemes.append(t[0])
                     styles.append(t[2])
-            tokens = self.tokenizer(phonemes).long()
-            styles = torch.tensor(styles).long()
+            tokens = self.tokenizer(phonemes).long().to(self._device())
+            styles = torch.tensor(styles, device = self._device()).long()
         else:
             tokens = None
             styles = None
@@ -166,7 +167,16 @@ class SuperVoice(torch.nn.Module):
         target_pad_begin = 1
         target_pad_end = 1
         if condition is not None:
-            (cond_audio, (cond_tokens, cond_token_styles)) = condition
+
+            # If tensor
+            if type(condition) is torch.Tensor:
+                cond_audio = condition
+                cond_tokens = None
+                cond_token_styles = None
+            else:
+                (cond_audio, (cond_tokens, cond_token_styles)) = condition
+
+            # Unpack condition
             (cond_tokens, cond_token_styles) = self.create_text_prompt(cond_tokens, cond_token_styles, cond_audio.shape[0]) # Normalize inputs
             target_pad_begin = cond_audio.shape[0]
 
