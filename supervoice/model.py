@@ -115,6 +115,23 @@ class SuperVoice(torch.nn.Module):
         # Return prompt
         return (audio_prompt, text_prompt)
 
+    def load_gpt_prompt(self, prompt):
+        """
+        Loads a GPT prompt
+        """
+
+        tokens = []
+        token_styles = []
+        for ph, dur, st in prompt:
+            tok = self.tokenizer([ph])
+            for i in range(dur):
+                tokens.append(tok[0])
+                token_styles.append(st)
+        tokens = torch.tensor(tokens, device = self._device()).long()
+        token_styles = torch.tensor(token_styles, device = self._device()).long()
+        return (tokens, token_styles)
+
+
     def restore_segment(self, prompt, interval, steps = 4, alpha = None):
         """
         Restore segment of a source audio prompt
