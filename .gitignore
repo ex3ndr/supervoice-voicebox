@@ -12,3 +12,4 @@ pretrained
 output
 *.code-workspace
 debug_*
+.env

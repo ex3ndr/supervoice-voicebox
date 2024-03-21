@@ -65,7 +65,7 @@ def continious_phonemes_to_discreete(raw_phonemes, phoneme_duration):
     return intervals
 
 
-def compute_alignments(config, tg, style, total_duration):
+def compute_alignments(config, tg, style, total_duration, adjust_style=True):
     """
     Compute alignments from TextGrid object and style tensor
     """
@@ -89,6 +89,6 @@ def compute_alignments(config, tg, style, total_duration):
 
     # Style tokens
     y = resolve_style(config, style, [i[1] for i in x])
-    x = [(xi[0], xi[1], yi + 1) for xi, yi in zip(x, y)]
+    x = [(xi[0], xi[1], yi + 1 if adjust_style else yi) for xi, yi in zip(x, y)]
 
     return x
