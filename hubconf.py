@@ -8,7 +8,7 @@ def phonemizer(gpt = None, vocoder = None):
     from supervoice.model import SuperVoice
 
     # Load model
-    checkpoint = torch.hub.load_state_dict_from_url("https://github.com/ex3ndr/supervoice/releases/download/v0.0.1/supervoice_pitch_400000.pt", map_location="cpu")
+    checkpoint = torch.hub.load_state_dict_from_url("https://shared.korshakov.com/models/supervoice-pitch-400000.pt", map_location="cpu")
     model = SuperVoice(gpt, vocoder)
     model.audio_model.load_state_dict(checkpoint['model'])
     model.eval()
