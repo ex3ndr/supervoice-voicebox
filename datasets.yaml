@@ -9,3 +9,4 @@ datasets:
   - common-voice-16.0-ru
   - common-voice-16.0-uk
   - esd
+  - librilight-processed
