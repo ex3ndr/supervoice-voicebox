@@ -8,6 +8,16 @@ An independent VoiceBox implementation for voice synthesis. Currently in BETA.
 * 🤹‍♂️ Versatile - synthesiszed voice has high variability
 * 📕 Currently only English language is supported, but nothing stops us from adding more languages.
 
+## Samples
+
+https://github.com/ex3ndr/supervoice/assets/400659/d9aa2738-f9ce-4754-a230-cc56dc24c408
+
+https://github.com/ex3ndr/supervoice/assets/400659/0b42aff8-8728-44ee-b05d-b2051bf6376b
+
+https://github.com/ex3ndr/supervoice/assets/400659/77e1f5ba-7243-4a0d-aa39-53c9aa65f894
+
+https://github.com/ex3ndr/supervoice/assets/400659/b65b5c67-106e-4937-8e7d-acdd515e547e
+
 ## How to use
 
 Supervoice consists of three networks: `gpt` for phoneme and prosogy generation, `audio model` for audio synthesis and `vocoder` for audio generation. Supervoice is published using Torch Hub, so you can use it as follows:
