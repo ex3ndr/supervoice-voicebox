@@ -1,5 +1,12 @@
 # ✨ SuperVoice [BETA]
-An independent VoiceBox implementation for voice synthesis.
+An independent VoiceBox implementation for voice synthesis. Currently in BETA.
+
+## Features
+
+* ⚡️ Narural sounding
+* 🎤 High quality - 24khz audio
+* 🤹‍♂️ Versatile - synthesiszed voice has high variability
+* 📕 Currently only English language is supported, but nothing stops us from adding more languages.
 
 ## How to use
 
@@ -27,6 +34,7 @@ model.eval()
 
 # Generate audio
 # Supervoice has three example voices: "voice_1", "voice_2" (my favorite), "voice_3"
+# You can also remove the voice parameter to use the random one, or provide your own, but you need a TextGrid alignment for that.
 # Steps means quality of the audio, recommended value is 4, 8 or 32.
 # Alpha is a parameter of randomness, it should be less than 1.0, stable synthesis with small variaons is 0.1, 0.3 is a good value for more expressive synthesis, 0.5 is a maximum recommended value.
 output = model.synthesize("What time is it, Steve?", voice = "voice_1", steps = 8, alpha = 0.1)
