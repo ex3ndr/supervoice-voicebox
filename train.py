@@ -31,8 +31,8 @@ from supervoice.tensors import count_parameters, probability_binary_mask, drop_u
 from utils.dataset import get_aligned_dataset_loader, get_aligned_dataset_dumb_loader
 
 # Train parameters
-train_experiment = "audio_pitch3"
-train_project="supervoice-audio"
+train_experiment = "ft-01"
+train_project="supervoice"
 
 # Normal training
 train_datasets = ["libritts", "vctk"]
@@ -44,12 +44,10 @@ train_source_experiment = None
 # train_voices = ["00000004"] # Male Voice
 # train_source_experiment = "audio_large_begin_end"
 
-train_pretraining_filelist = './datasets/list_pretrain.csv'
-train_pretraining = False
 train_auto_resume = True
 train_batch_size = 16 # Per GPU
-train_grad_accum_every = 8
-train_steps = 1000000
+train_grad_accum_every = 2
+train_steps = 60000
 train_loader_workers = 8
 train_log_every = 1
 train_save_every = 1000
@@ -84,16 +82,14 @@ def main():
     accelerator.print("Loading dataset...")
     tokenizer = Tokenizer(config)
     phoneme_duration = config.audio.hop_size / config.audio.sample_rate
-    if train_pretraining:
-        train_loader = get_aligned_dataset_dumb_loader(path = train_pretraining_filelist, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
-    else:
-        train_loader = get_aligned_dataset_loader(names = train_datasets, voices = train_voices, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
+    train_loader = get_aligned_dataset_loader(names = train_datasets, voices = train_voices, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
     test_loader = get_aligned_dataset_loader(names = ["eval"], voices = None, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_evaluate_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
 
     # Prepare model
     accelerator.print("Loading model...")
     step = 0
-    raw_model = AudioPredictor(config)
+    flow_model = torch.hub.load(repo_or_dir='ex3ndr/supervoice-flow', model='flow')
+    raw_model = AudioPredictor(flow_model, config)
     model = raw_model
     wd_params, no_wd_params = [], []
     for param in model.parameters():

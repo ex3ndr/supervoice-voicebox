@@ -10,3 +10,4 @@ datasets:
   - common-voice@16.0-uk
   - esd
   - librilight-processed
+  - hifi-tts

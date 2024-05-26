@@ -60,6 +60,23 @@ display(Audio(data=waveform, rate=24000))
 
 ```
 
+## Datasets
+
+Before training you need to fetch datasets using `datasets` tool:
+```bash
+datasets sync
+```
+
+Then you need to prepare them in several steps:
+```bash
+
+# Prepare datasets
+python ./datasets_prepare.py
+
+# Align datasets
+./datasets_align.sh
+```
+
 ## License
 
 MIT
