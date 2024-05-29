@@ -28,25 +28,17 @@ from supervoice.config import config
 from supervoice.model_audio import AudioPredictor
 from supervoice.tokenizer import Tokenizer
 from supervoice.tensors import count_parameters, probability_binary_mask, drop_using_mask, interval_mask
-from utils.dataset import get_aligned_dataset_loader, get_aligned_dataset_dumb_loader
+from training.dataset import create_single_sampler, create_batch_sampler, create_async_loader
 
 # Train parameters
-train_experiment = "ft-01"
+train_experiment = "ft-02"
 train_project="supervoice"
-
-# Normal training
 train_datasets = ["libritts", "vctk"]
+# train_datasets = ["eval"]
 train_voices = None
 train_source_experiment = None
-
-# Finetuning
-# train_datasets = ["libritts"]
-# train_voices = ["00000004"] # Male Voice
-# train_source_experiment = "audio_large_begin_end"
-
 train_auto_resume = True
-train_batch_size = 16 # Per GPU
-train_grad_accum_every = 2
+train_grad_accum_every = 4
 train_steps = 60000
 train_loader_workers = 8
 train_log_every = 1
@@ -54,7 +46,7 @@ train_save_every = 1000
 train_watch_every = 1000
 train_evaluate_every = 1
 train_evaluate_batch_size = 10
-train_max_segment_size = 500
+train_max_segment_size = 5000 # 75 seconds
 train_lr_start = 1e-7
 train_lr_max = 2e-5
 train_warmup_steps = 5000
@@ -74,16 +66,17 @@ def main():
     dtype = torch.float16 if train_mixed_precision == "fp16" else (torch.bfloat16 if train_mixed_precision == "bf16" else torch.float32)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True 
-    set_seed(42)
+    # set_seed(42)
     lr_start = train_lr_start * accelerator.num_processes
     lr_max = train_lr_max * accelerator.num_processes
 
     # Prepare dataset
     accelerator.print("Loading dataset...")
     tokenizer = Tokenizer(config)
-    phoneme_duration = config.audio.hop_size / config.audio.sample_rate
-    train_loader = get_aligned_dataset_loader(names = train_datasets, voices = train_voices, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
-    test_loader = get_aligned_dataset_loader(names = ["eval"], voices = None, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_evaluate_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
+    base_sampler = create_single_sampler(train_datasets)
+    sampler = create_batch_sampler(base_sampler, tokenizer, frames = train_max_segment_size, dtype = dtype)
+    train_loader = create_async_loader(sampler, num_workers = train_loader_workers)
+    # train_loader = get_aligned_dataset_loader(names = train_datasets, voices = train_voices, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
 
     # Prepare model
     accelerator.print("Loading model...")
@@ -91,6 +84,7 @@ def main():
     flow_model = torch.hub.load(repo_or_dir='ex3ndr/supervoice-flow', model='flow')
     raw_model = AudioPredictor(flow_model, config)
     model = raw_model
+    # model = torch.compile(model)
     wd_params, no_wd_params = [], []
     for param in model.parameters():
         param_list = no_wd_params if param.ndim < 2 else wd_params
@@ -99,15 +93,12 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = train_steps)
 
     # Accelerate
-    model, optim, train_loader, test_loader = accelerator.prepare(model, optim, train_loader, test_loader)
+    model, optim = accelerator.prepare(model, optim)
     train_cycle = cycle(train_loader)
-    test_cycle = cycle(test_loader)
-    test_batch = next(test_cycle)
     hps = {
         "segment_size": train_max_segment_size, 
         "train_lr_start": train_lr_start, 
         "train_lr_max": train_lr_max, 
-        "batch_size": train_batch_size, 
         "grad_accum_every": train_grad_accum_every,
         "steps": train_steps, 
         "warmup_steps": train_warmup_steps,
@@ -177,23 +168,31 @@ def main():
 
         # Load batch
         total = 0
+        last_loss = 0
         for _ in range(train_grad_accum_every):
             with accelerator.accumulate(model):
                 with accelerator.autocast():
+
+                    # Load batch
                     batch = next(train_cycle)
-                    tokens, style, audio = batch
+                    tokens, style, audio, lengths = batch
+                    tokens = tokens.squeeze(0)
+                    style = style.squeeze(0)
+                    audio = audio.squeeze(0)
                     batch_size = audio.shape[0]
                     seq_len = audio.shape[1]
                     total += batch_size * seq_len
+                    # print(audio.shape[0] * audio.shape[1])
+                    # print(torch.cuda.memory_allocated(device))
 
                     # Normalize audio
                     audio = (audio - config.audio.norm_mean) / config.audio.norm_std
 
                     # Prepare CFM
-                    times = torch.rand((audio.shape[0],), dtype = audio.dtype, device = device)
+                    times = torch.rand((audio.shape[0],), dtype = audio.dtype)
                     # sigma = 0.0 # What to use here?
                     t = rearrange(times, 'b -> b 1 1')
-                    noise = torch.randn_like(audio, device=device)
+                    noise = torch.randn_like(audio)
                     audio_noizy = (1 - (1 - train_sigma) * t) * noise + t * audio
                     flow = audio - (1 - train_sigma) * noise
 
@@ -202,22 +201,22 @@ def main():
                     # 30% rows of masking everything
                     min_mask_length = min(max(10, math.floor(seq_len * 0.7)), seq_len)
                     max_mask_length = seq_len
-                    mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, 0.3, device)
+                    mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, 0.3, device = "cpu")
 
                     # Drop audio (but not tokens) depending on mask
                     audio = drop_using_mask(source = audio, replacement = 0, mask = mask)
 
                     # 0.9 probability of dropping unmasked tokens to condition on audio only
-                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.9, device = device).unsqueeze(-1) * ~mask
+                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.9, device = "cpu").unsqueeze(-1) * ~mask
                     tokens = drop_using_mask(source = tokens, replacement = 0, mask = conditional_drop_mask)
                     style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
 
                     # 0.4 probability of dropping style tokens
-                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.4, device = device)
+                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.4, device = "cpu")
                     style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
 
                     # 0.2 probability of dropping everything
-                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = device)
+                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = "cpu")
                     audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
                     tokens = drop_using_mask(source = tokens, replacement = 0, mask = conditional_drop_mask)
                     style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
@@ -227,19 +226,19 @@ def main():
                     predicted, loss = model(
 
                         # Tokens
-                        tokens = tokens, 
-                        tokens_style = style,
+                        tokens = tokens.to(device), 
+                        tokens_style = style.to(device),
 
                         # Audio
-                        audio = audio, 
-                        audio_noizy = audio_noizy, 
+                        audio = audio.to(device), 
+                        audio_noizy = audio_noizy.to(device), 
 
                         # Time
-                        times = times, 
+                        times = times.to(device), 
 
                         # Loss
-                        mask = mask, 
-                        target = flow
+                        mask = mask.to(device), 
+                        target = flow.to(device)
                     )
 
                     # # Check if loss is nan
@@ -253,24 +252,25 @@ def main():
                         accelerator.clip_grad_norm_(model.parameters(), train_clip_grad_norm)
                     optim.step()
 
+                    # Cleanup
+                    # del tokens
+                    # del style
+                    # del audio
+                    # del audio_noizy
+                    # del times
+                    # del mask
+                    # del flow
+                    # del loss
+                    # del predicted
+                    last_loss = loss.detach().cpu().item()
+                    del loss
+
+
                     # Log skipping step
                     if optim.step_was_skipped:
                         accelerator.print("Step was skipped")
 
-        return loss, predicted, flow, total, lr
-
-    # def train_eval():
-    #     model.eval()
-    #     with torch.inference_mode():
-    #         tokens, style, audio = test_batch
-    #         audio = (audio - config.audio.norm_mean) / config.audio.norm_std
-    #         mask = torch.tokens(audio, device = device)
-    #         predicted = model.sample(tokens = tokens, tokens_style = style, audio = audio, mask = mask)
-    #         score = evaluate_mos(predicted, config.audio.sample_rate)
-    #         gathered_score = accelerator.gather(score).cpu()
-    #         if len(gathered_score.shape) == 0:
-    #             gathered_score = gathered_score.unsqueeze(0)
-    #         return gathered_score.mean().item()
+        return last_loss, total, lr
 
     #
     # Start Training
@@ -279,7 +279,7 @@ def main():
     accelerator.print("Training started at step", step)
     while step < train_steps:
         start = time.time()
-        loss, predicted, flow, total, lr = train_step()
+        loss, total, lr = train_step()
         total = total * accelerator.num_processes # Scale to all processes
         end = time.time()
 
@@ -292,16 +292,22 @@ def main():
             accelerator.log({
                 "learning_rate": lr,
                 "loss": loss,
-                "predicted/mean": predicted.mean(),
-                "predicted/max": predicted.max(),
-                "predicted/min": predicted.min(),
-                "target/mean": flow.mean(),
-                "target/max": flow.max(),
-                "target/min": flow.min(),
+                # "predicted/mean": predicted.mean(),
+                # "predicted/max": predicted.max(),
+                # "predicted/min": predicted.min(),
+                # "target/mean": flow.mean(),
+                # "target/max": flow.max(),
+                # "target/min": flow.min(),
                 "data/length": total,
                 "speed": speed
             }, step=step)
             accelerator.print(f'Step {step}: loss={loss}, lr={lr}, time={end - start} sec, it/s={speed}')
+
+        # del loss
+        # del predicted
+        # del flow
+        # del total
+        # del lr
         
         # Evaluate
         # if step % train_evaluate_every == 0:

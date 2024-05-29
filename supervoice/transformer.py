@@ -216,22 +216,32 @@ def get_slopes_power_of_2(n_heads, device):
         slopes_cache[key] = torch.tensor([start*ratio**i for i in range(n_heads)], requires_grad=False, device = device) * -1
     return slopes_cache[key]
 
-alibi_cache = {}
+# alibi_cache = {}
+# def get_alibi_mask(seq_len, n_heads, device):
+#     global alibi_cache
+#     key = str(seq_len) + "_" + str(n_heads) + "_" + str(device)
+
+#     if key not in alibi_cache:
+#         slopes = get_slopes_power_of_2(n_heads, device)
+#         context_position = torch.arange(seq_len, device = device)[:, None]
+#         memory_position = torch.arange(seq_len, device = device)[None, :]
+#         relative_position = memory_position - context_position 
+#         relative_position = torch.abs(relative_position).unsqueeze(0).expand(n_heads, -1,-1)
+#         alibi = slopes.unsqueeze(1).unsqueeze(1) * relative_position
+#         alibi = alibi.view(1, n_heads, seq_len, seq_len)
+#         alibi_cache[key] = alibi
+
+#     return alibi_cache[key]
+
 def get_alibi_mask(seq_len, n_heads, device):
-    global alibi_cache
-    key = str(seq_len) + "_" + str(n_heads) + "_" + str(device)
-
-    if key not in alibi_cache:
-        slopes = get_slopes_power_of_2(n_heads, device)
-        context_position = torch.arange(seq_len, device = device)[:, None]
-        memory_position = torch.arange(seq_len, device = device)[None, :]
-        relative_position = memory_position - context_position 
-        relative_position = torch.abs(relative_position).unsqueeze(0).expand(n_heads, -1,-1)
-        alibi = slopes.unsqueeze(1).unsqueeze(1) * relative_position
-        alibi = alibi.view(1, n_heads, seq_len, seq_len)
-        alibi_cache[key] = alibi
-
-    return alibi_cache[key]
+    slopes = get_slopes_power_of_2(n_heads, device)
+    context_position = torch.arange(seq_len, device = device)[:, None]
+    memory_position = torch.arange(seq_len, device = device)[None, :]
+    relative_position = memory_position - context_position 
+    relative_position = torch.abs(relative_position).unsqueeze(0).expand(n_heads, -1,-1)
+    alibi = slopes.unsqueeze(1).unsqueeze(1) * relative_position
+    alibi = alibi.view(1, n_heads, seq_len, seq_len)
+    return alibi
 
 
 def rotate_half(x):

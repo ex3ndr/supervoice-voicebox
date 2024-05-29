@@ -13,8 +13,9 @@ from tqdm import tqdm
 from supervoice.audio import load_mono_audio, spectogram
 from supervoice.model_style import export_style
 from supervoice.config import config
-from utils.audio import trim_silence, improve_audio, dowload_enhancer
+from training.audio import trim_silence, improve_audio, dowload_enhancer
 import pyworld as pw
+import json
 
 #
 # Parameters
@@ -40,8 +41,8 @@ def speaker_directory(speaker):
 
 def execute_parallel(args):
     process_id = multiprocessing.current_process()._identity[0]
-    files, vad, collection_dir, index = args
-    file, text, speaker = files[index]
+    files, vad, collection_dir, aligned_dir, index = args
+    file, text, speaker, alignment = files[index]
     device = "cuda:" + str(process_id % torch.cuda.device_count())
 
     # Format filename from index (e.g. 000001)
@@ -76,6 +77,14 @@ def execute_parallel(args):
     torch.save(style.cpu(), os.path.join(target_dir, target_name + ".style.pt"))
     with open(os.path.join(target_dir, target_name + ".txt"), "w", encoding="utf-8") as f:
         f.write(text)
+    
+    # Copy alignments if provided
+    if alignment is not None:
+        target_dir = os.path.join(aligned_dir, speaker_directory(speaker))
+        with open(alignment, "r") as f:
+            alignment = f.read()
+        with open(os.path.join(target_dir, target_name + ".TextGrid"), "w", encoding="utf-8") as f:
+            f.write(alignment)
 
 def load_vctk_corpus():
     files = []
@@ -105,7 +114,7 @@ def load_vctk_corpus():
             speaker = speakers[speaker]
 
             # Append
-            files.append((file, text, speaker))
+            files.append((file, text, speaker, None))
         else:
             print("Strange filename:", filename)    
 
@@ -169,7 +178,7 @@ def load_libritts_corpus(collections):
         speaker = speakers[speaker]
 
         # Append
-        files.append((file, text, speaker))
+        files.append((file, text, speaker, None))
 
     return { 'files': files, 'speakers': speakers, 'vad': False }
 
@@ -195,9 +204,66 @@ def load_common_voice_corpus(path):
         speaker = speakers[speaker]
 
         # Append
-        files.append((file, text, speaker))
+        files.append((file, text, speaker, None))
 
     return { 'files': files, 'speakers': speakers, 'vad': True }
+
+def load_hifi_tts_corpus():
+    files = []
+    speakers = {}
+
+    # Iterate all speakers
+    for ff in Path("./external_datasets/hifi-tts").glob("*_train.json"):
+
+        # Extract speaker
+        speaker = "hifi_tts_" + ff.stem.split("_")[0]
+        if speaker not in speakers:
+            speakers[speaker] = len(speakers)
+        speaker = speakers[speaker]
+
+        # Read each line
+        with open(ff, "r") as f:
+            for line in f:
+                data = json.loads(line)
+                text = data["text"]
+                audio = "./external_datasets/hifi-tts/" + data["audio_filepath"]
+                files.append((audio, text, speaker, None))
+
+    return { 'files': files, 'speakers': speakers, 'vad': False }
+
+def load_librilight_aligned(path):
+    files = []
+    speakers = {}
+
+    # Load CSV
+    ids = []
+    with open(path + "files_valid.txt") as f:
+        for line in f:
+            ids.append(line.strip())
+    
+    # Process 
+    for id in ids:
+    
+        # Speaker
+        speaker = "librilight_" + id.split("/")[0]
+        if speaker not in speakers:
+            speakers[speaker] = len(speakers)
+        speaker = speakers[speaker]
+
+        # Audio
+        audio = path + id + ".flac"
+
+        # Extract text
+        with open(path  + id + ".txt", "r") as t:
+            text = t.read().strip()
+                
+        # Alignment
+        alignment = path  + id + ".TextGrid"
+
+        # Append
+        files.append((audio, text, speaker, alignment))
+
+    return { 'files': files, 'speakers': speakers, 'vad': False }
 
 def execute_run():
     torch.multiprocessing.set_start_method('spawn')
@@ -209,6 +275,8 @@ def execute_run():
     collections['libritts'] = load_libritts_corpus(["libritts-r-clean-100", "libritts-r-clean-360"])
     collections['eval'] = load_libritts_corpus(["libritts-r/test-clean"])
     collections['vctk'] = load_vctk_corpus()
+    collections['hifi-tts'] = load_hifi_tts_corpus()
+    collections['librilight-small'] = load_librilight_aligned("./external_datasets/librilight-processed/")
     # collections['common-voice-en'] = load_common_voice_corpus("external_datasets/common-voice-16.0-en/en")
     # collections['common-voice-ru'] = load_common_voice_corpus("external_datasets/common-voice-16.0-ru/ru")
     # collections['common-voice-uk'] = load_common_voice_corpus("external_datasets/common-voice-16.0-uk/uk")
@@ -221,8 +289,9 @@ def execute_run():
         speakers = collections[collection]['speakers']
         vad = collections[collection]['vad']
         prepared_dir = "datasets/" + name + "-prepared/"
+        aligned_dir = "datasets/" + name + "-aligned/"
 
-         # Check if exists
+        # Check if exists
         if Path(prepared_dir).exists():
             print(f"Collection {name} already prepared")
             continue
@@ -231,13 +300,27 @@ def execute_run():
         for speaker in speakers:
             Path(prepared_dir + speaker_directory(speakers[speaker])).mkdir(parents=True, exist_ok=True)
 
+        # Create alignment directories if needed
+        if files[0][3] is not None:
+            for speaker in speakers:
+                Path(aligned_dir + speaker_directory(speakers[speaker])).mkdir(parents=True, exist_ok=True)
+
         # Process files
         with multiprocessing.Manager() as manager:
             files = manager.list(files)
-            args_list = [(files, vad, prepared_dir, i) for i in range(len(files))]
+            args_list = [(files, vad, prepared_dir, aligned_dir, i) for i in range(len(files))]
             with multiprocessing.Pool(processes=PARAM_WORKERS) as pool:
                 for result in tqdm(pool.imap_unordered(execute_parallel, args_list, chunksize=32), total=len(files)):
                     pass
+
+    # Indexing collections
+    for collection in collections:
+        print(f"Indexing collection {collection}...")
+        ids = [str(file.with_suffix("").relative_to("./datasets/" + collection + "-prepared")) for file in Path("datasets/" + collection + "-prepared/").glob("*/*.wav")]
+        ids.sort()
+        with open("datasets/" + collection + ".txt", "w") as f:
+            for id in ids:
+                f.write(id + "\n")
 
     # End
     print("Done")

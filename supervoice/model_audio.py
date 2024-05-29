@@ -15,6 +15,7 @@ class AudioPredictor(torch.nn.Module):
         self.n_style_tokens = config.tokenizer_style.tokens + 1 # +1 Padding
         self.config = config.audio_predictor
         self.flow = flow
+        self.flow.transformer.cache_alibi = False
 
         # Token and embedding
         self.token_embedding = torch.nn.Embedding(self.n_tokens, self.config.n_embeddings)
