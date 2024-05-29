@@ -3,9 +3,6 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange, reduce, repeat
 from torchdiffeq import odeint
-
-from .transformer import Transformer, ConvPositionEmbed
-from .debug import debug_if_invalid
 from .tensors import drop_using_mask, merge_mask
 
 class AudioPredictor(torch.nn.Module):

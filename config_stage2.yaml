@@ -1,0 +1,4 @@
+name: "stage-02"
+source: "stage-01"
+datasets: ["hifi-tts"]
+steps: 60000

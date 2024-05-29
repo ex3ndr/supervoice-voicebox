@@ -14,6 +14,10 @@ from pathlib import Path
 import math
 import random
 from tqdm import tqdm
+from typing import Optional
+from dataclasses import asdict, dataclass, field
+from omegaconf import OmegaConf
+import argparse
 
 # ML
 import torch
@@ -30,32 +34,51 @@ from supervoice.tokenizer import Tokenizer
 from supervoice.tensors import count_parameters, probability_binary_mask, drop_using_mask, interval_mask
 from training.dataset import create_single_sampler, create_batch_sampler, create_async_loader
 
-# Train parameters
-train_experiment = "ft-02"
-train_project="supervoice"
-train_datasets = ["libritts", "vctk"]
-# train_datasets = ["eval"]
-train_voices = None
-train_source_experiment = None
-train_auto_resume = True
-train_grad_accum_every = 4
-train_steps = 60000
-train_loader_workers = 8
-train_log_every = 1
-train_save_every = 1000
-train_watch_every = 1000
-train_evaluate_every = 1
-train_evaluate_batch_size = 10
-train_max_segment_size = 5000 # 75 seconds
-train_lr_start = 1e-7
-train_lr_max = 2e-5
-train_warmup_steps = 5000
-train_mixed_precision = "fp16" # "bf16" or "fp16" or None
-train_clip_grad_norm = 0.2
-train_sigma = 1e-5
+@dataclass(frozen=True)
+class TrainingConfig:
+    name: str = "ft-01"
+    datasets: list[str] = field(default_factory=list)
+    source: Optional[str] = None
+    steps: int = 60000
 
 # Train
 def main():
+
+    # Parse args
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--yaml", type=Path, default=Path(__file__).parent / "config_stage1.yaml")
+    args = parser.parse_args()
+
+    # Train parameters
+    train_experiment = "ft-02"
+    train_project="supervoice"
+    train_datasets = ["libritts", "vctk"]
+    train_voices = None
+    train_source_experiment = None
+    train_auto_resume = True
+    train_grad_accum_every = 2
+    train_steps = 60000
+    train_loader_workers = 8
+    train_log_every = 1
+    train_save_every = 1000
+    train_watch_every = 1000
+    train_evaluate_every = 1
+    train_evaluate_batch_size = 10
+    train_max_segment_size = 5000 # 50 seconds
+    train_lr_start = 1e-7
+    train_lr_max = 2e-5
+    train_warmup_steps = 5000
+    train_mixed_precision = "fp16" # "bf16" or "fp16" or None
+    train_clip_grad_norm = 0.2
+    train_sigma = 1e-5
+
+    # Load config
+    print('Loading config ' + str(args.yaml))
+    train_config = TrainingConfig(**dict(OmegaConf.merge(TrainingConfig(), OmegaConf.load(args.yaml))))
+    train_experiment = train_config.name
+    train_datasets = train_config.datasets
+    train_steps = train_config.steps
+    train_source_experiment = train_config.source
 
     # Prepare accelerator
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
