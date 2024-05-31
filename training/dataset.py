@@ -88,11 +88,11 @@ def get_aligned_dataset_loader(names, voices, max_length, workers, batch_size, t
             try:
 
                 # Spectogram
-                audio = torch.load(self.files[index])
+                audio = torch.load(self.files[index], map_location='cpu')
                 audio = audio.transpose(0, 1) # Reshape audio (C, T) -> (T, C)
 
                 # Styles
-                style = torch.load(self.styles[index])
+                style = torch.load(self.styles[index], map_location='cpu')
 
                 # Phonemes
                 aligned_phonemes = compute_alignments(config, self.textgrid[index], style, audio.shape[0])
@@ -201,11 +201,11 @@ def create_single_sampler(datasets):
         index = random.randint(0, len(files) - 1)
 
         # Load spectogram
-        audio = torch.load(files[index])
+        audio = torch.load(files[index], map_location='cpu')
         audio = audio.transpose(0, 1) # Reshape audio (C, T) -> (T, C)
 
         # Load style
-        style = torch.load(styles[index])
+        style = torch.load(styles[index], map_location='cpu')
 
         # Load textgrid
         ttg = textgrid.TextGrid.fromFile(tg[index])
