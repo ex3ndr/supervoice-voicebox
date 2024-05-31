@@ -1,0 +1,4 @@
+name: "hifi-01"
+source: null
+datasets: ["hifi-tts"]
+steps: 145000

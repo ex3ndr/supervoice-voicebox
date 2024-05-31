@@ -277,6 +277,7 @@ def execute_run():
     collections['vctk'] = load_vctk_corpus()
     collections['hifi-tts'] = load_hifi_tts_corpus()
     collections['librilight-small'] = load_librilight_aligned("./external_datasets/librilight-processed/")
+    collections['librilight-medium'] = load_librilight_aligned("./external_datasets/librilight-medium-processed/")
     # collections['common-voice-en'] = load_common_voice_corpus("external_datasets/common-voice-16.0-en/en")
     # collections['common-voice-ru'] = load_common_voice_corpus("external_datasets/common-voice-16.0-ru/ru")
     # collections['common-voice-uk'] = load_common_voice_corpus("external_datasets/common-voice-16.0-uk/uk")
