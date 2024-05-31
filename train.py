@@ -219,31 +219,29 @@ def main():
                     audio_noizy = (1 - (1 - train_sigma) * t) * noise + t * audio
                     flow = audio - (1 - train_sigma) * noise
 
-                    # Prepare Mask
+                    # Interval mask
                     # 70% - 100% of sequence with a minimum length of 10
-                    # 30% rows of masking everything
                     min_mask_length = min(max(10, math.floor(seq_len * 0.7)), seq_len)
                     max_mask_length = seq_len
-                    mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, 0.3, device = "cpu")
+                    mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, device = "cpu")
 
-                    # Drop audio (but not tokens) depending on mask
+                    # 0.15 probability of dropping everything
+                    drop_completely_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.15, device = "cpu")
+                    mask = drop_using_mask(source = mask, replacement = 1, mask = drop_completely_mask)
+
+                    # Preapply mask
                     audio = drop_using_mask(source = audio, replacement = 0, mask = mask)
+                    # tokens = drop_using_mask(source = tokens, replacement = 0, mask = mask)
+                    # style = drop_using_mask(source = style, replacement = 0, mask = mask)
 
                     # 0.9 probability of dropping unmasked tokens to condition on audio only
-                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.9, device = "cpu").unsqueeze(-1) * ~mask
-                    tokens = drop_using_mask(source = tokens, replacement = 0, mask = conditional_drop_mask)
-                    style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
+                    # conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.9, device = "cpu").unsqueeze(-1) * ~mask
+                    # tokens = drop_using_mask(source = tokens, replacement = 0, mask = conditional_drop_mask)
+                    # style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
 
                     # 0.4 probability of dropping style tokens
-                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.4, device = "cpu")
-                    style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
-
-                    # 0.2 probability of dropping everything
-                    conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.2, device = "cpu")
-                    audio = drop_using_mask(source = audio, replacement = 0, mask = conditional_drop_mask)
-                    tokens = drop_using_mask(source = tokens, replacement = 0, mask = conditional_drop_mask)
-                    style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
-                    mask = drop_using_mask(source = mask, replacement = 1, mask = conditional_drop_mask)
+                    # conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.4, device = "cpu")
+                    # style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
 
                     # Train step
                     predicted, loss = model(
