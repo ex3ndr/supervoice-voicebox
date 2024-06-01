@@ -37,6 +37,9 @@ def interval_mask(batch_size, length, min_interval, max_interval, device):
     tensor = torch.full((batch_size, length), False, device = device, dtype = torch.bool)
     for i in range(batch_size):
         interval_length = random.randint(min_interval, max_interval)
-        start_point = random.randint(0, length - interval_length - 1)
+        if length - interval_length - 1 > 0:
+            start_point = random.randint(0, length - interval_length - 1)
+        else:
+            start_point = 0
         tensor[i, start_point:start_point + interval_length] = True 
     return tensor

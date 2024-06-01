@@ -214,7 +214,7 @@ def create_single_sampler(datasets):
 
     return sample
 
-def create_batch_sampler(base_sampler, tokenizer, *, frames, dtype = None):
+def create_batch_sampler(base_sampler, tokenizer, *, frames, max_single, dtype = None):
 
     def fetch_single():
         
@@ -241,6 +241,13 @@ def create_batch_sampler(base_sampler, tokenizer, *, frames, dtype = None):
         if dtype is not None:
             audio = audio.to(dtype)
 
+        # Truncate
+        if len(phonemes) > max_single:
+            offset = random.randint(0, len(phonemes) - max_single)
+            phonemes = phonemes[offset:offset+max_single]
+            styles = styles[offset:offset+max_single]
+            audio = audio[offset:offset+max_single]
+
         return phonemes, styles, audio
 
 
@@ -256,7 +263,13 @@ def create_batch_sampler(base_sampler, tokenizer, *, frames, dtype = None):
             audio.append(a)
             max_length = a.shape[0]
         else:
-            # If the first sample is too long, return it truncated (should never happen thought)
+
+            # Truncate
+            p = p[:frames]
+            s = s[:frames]
+            a = a[:frames]
+
+            # If the first sample is too long, return it truncated
             return p.unsqueeze(0), s.unsqueeze(0), a.unsqueeze(0), [a.shape[0]]
 
         # Collect additional samples

@@ -64,7 +64,8 @@ def main():
     train_watch_every = 1000
     train_evaluate_every = 1
     train_evaluate_batch_size = 10
-    train_max_segment_size = 5000 # 50 seconds
+    train_target_duration = 6000 # 60 seconds
+    train_max_segment_size = 2000 # 20 seconds
     train_lr_start = 1e-7
     train_lr_max = 2e-5
     train_warmup_steps = 5000
@@ -97,7 +98,7 @@ def main():
     accelerator.print("Loading dataset...")
     tokenizer = Tokenizer(config)
     base_sampler = create_single_sampler(train_datasets)
-    sampler = create_batch_sampler(base_sampler, tokenizer, frames = train_max_segment_size, dtype = dtype)
+    sampler = create_batch_sampler(base_sampler, tokenizer, frames = train_target_duration, max_single = train_max_segment_size, dtype = dtype)
     train_loader = create_async_loader(sampler, num_workers = train_loader_workers)
     # train_loader = get_aligned_dataset_loader(names = train_datasets, voices = train_voices, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
 
@@ -243,6 +244,8 @@ def main():
                     # conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.4, device = "cpu")
                     # style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
 
+                    # print(device, tokens.shape, audio.shape, style.shape)
+
                     # Train step
                     predicted, loss = model(
 
@@ -274,11 +277,11 @@ def main():
                     optim.step()
 
                     # Cleanup
-                    # del tokens
-                    # del style
-                    # del audio
-                    # del audio_noizy
-                    # del times
+                    del tokens
+                    del style
+                    del audio
+                    del audio_noizy
+                    del times
                     # del mask
                     # del flow
                     # del loss
