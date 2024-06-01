@@ -1,0 +1,5 @@
+name: "balanced-01"
+source: null
+datasets: ["librilight-medium", "hifi-tts", "vctk"]
+steps: 145000
+balanced: true

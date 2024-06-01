@@ -1,4 +1,5 @@
 name: "stage-01-01"
 source: null
-datasets: ["hifi-tts", "librilight-small"]
+datasets: ["hifi-tts", "librilight-medium"]
 steps: 145000
+balanced: false

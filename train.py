@@ -32,7 +32,7 @@ from supervoice.config import config
 from supervoice.model_audio import AudioPredictor
 from supervoice.tokenizer import Tokenizer
 from supervoice.tensors import count_parameters, probability_binary_mask, drop_using_mask, interval_mask
-from training.dataset import create_single_sampler, create_batch_sampler, create_async_loader
+from training.dataset import create_single_sampler, create_single_sampler_balanced, create_batch_sampler, create_async_loader
 
 @dataclass(frozen=True)
 class TrainingConfig:
@@ -40,6 +40,7 @@ class TrainingConfig:
     datasets: list[str] = field(default_factory=list)
     source: Optional[str] = None
     steps: int = 60000
+    balanced: bool = False
 
 # Train
 def main():
@@ -97,7 +98,10 @@ def main():
     # Prepare dataset
     accelerator.print("Loading dataset...")
     tokenizer = Tokenizer(config)
-    base_sampler = create_single_sampler(train_datasets)
+    if train_config.balanced:
+        base_sampler = create_single_sampler_balanced(train_datasets)
+    else:
+        base_sampler = create_single_sampler(train_datasets)
     sampler = create_batch_sampler(base_sampler, tokenizer, frames = train_target_duration, max_single = train_max_segment_size, dtype = dtype)
     train_loader = create_async_loader(sampler, num_workers = train_loader_workers)
     # train_loader = get_aligned_dataset_loader(names = train_datasets, voices = train_voices, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)

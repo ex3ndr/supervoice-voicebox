@@ -195,7 +195,60 @@ def create_single_sampler(datasets):
         styles += s
 
     # Sampler
+    def sample(index = None):
+
+        # Random file
+        if index is None:
+            index = random.randint(0, len(files) - 1)
+
+        # Load spectogram
+        audio = torch.load(files[index], map_location='cpu')
+        audio = audio.transpose(0, 1) # Reshape audio (C, T) -> (T, C)
+
+        # Load style
+        style = torch.load(styles[index], map_location='cpu')
+
+        # Load textgrid
+        ttg = textgrid.TextGrid.fromFile(tg[index])
+
+        return (audio, style, ttg)
+
+    return sample
+
+def create_single_sampler_balanced(datasets):
+
+    # Load datasets
+    def load_dataset(name):
+
+        # Load ids
+        dataset_dir = "datasets/" + name + "-aligned"
+        dataset_audio_dir = "datasets/" + name + "-prepared"
+        with open("datasets/" + name + ".txt", "r") as f:
+            ids = f.read().splitlines()
+
+        # Load textgrids
+        tg = [dataset_dir + "/" + f + ".TextGrid" for f in ids]
+
+        # Style tokens
+        styles = [dataset_audio_dir + "/" + f + ".style.pt" for f in ids]
+
+        # Load audio
+        files = [dataset_audio_dir + "/" + f + ".pt" for f in ids]
+
+        return tg, files, styles
+
+    # Load all datasets
+    datasets = []
+    for name in datasets:
+        t, f, s = load_dataset(name)
+        datasets.append((t, f, s))
+
+    # Sampler
     def sample():
+
+        # Pick dataset
+        index = random.randint(0, len(datasets) - 1)
+        tg, files, styles = datasets[index]
 
         # Random file
         index = random.randint(0, len(files) - 1)
