@@ -215,7 +215,7 @@ def create_single_sampler(datasets):
 
     return sample
 
-def create_single_sampler_balanced(datasets):
+def create_single_sampler_balanced(names):
 
     # Load datasets
     def load_dataset(name):
@@ -239,7 +239,7 @@ def create_single_sampler_balanced(datasets):
 
     # Load all datasets
     datasets = []
-    for name in datasets:
+    for name in names:
         t, f, s = load_dataset(name)
         datasets.append((t, f, s))
 
