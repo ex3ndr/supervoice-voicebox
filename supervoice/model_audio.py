@@ -17,7 +17,10 @@ class AudioPredictor(torch.nn.Module):
         # Token and embedding
         self.token_embedding = torch.nn.Embedding(self.n_tokens, self.config.n_embeddings)
         self.style_embedding = torch.nn.Embedding(self.n_style_tokens, self.config.n_embeddings)
-        self.conditioning = torch.nn.Linear(self.config.n_embeddings, self.config.n_dim)
+        if self.config.use_direct:
+            self.conditioning = torch.nn.Linear(self.config.n_embeddings, config.audio.n_mels)
+        else:
+            self.conditioning = torch.nn.Linear(self.config.n_embeddings, self.config.n_dim)
 
 
     def sample(self, *, tokens, tokens_style, audio, mask, steps, alpha = None):
@@ -135,13 +138,18 @@ class AudioPredictor(torch.nn.Module):
             assert tokens.shape[1] == mask.shape[1]
 
         #
-        # Compute
+        # Conditioning
         #
 
         # Convert phoneme and style tokens to embeddings
         tokens_embed = self.token_embedding(tokens)
         tokens_embed += self.style_embedding(tokens_style)
         conditioning = self.conditioning(tokens_embed)
+
+        # Direct conditioning on audio
+        if self.config.use_direct:
+            audio = audio + conditioning
+            conditioning = None
 
         #
         # Speech Flow
@@ -152,7 +160,7 @@ class AudioPredictor(torch.nn.Module):
             # Inputs
             audio = audio,
             noise = audio_noizy,
-            condition = conditioning,
+            # condition = conditioning,
             mask = mask,
 
             # Time

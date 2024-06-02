@@ -43,3 +43,9 @@ def interval_mask(batch_size, length, min_interval, max_interval, device):
             start_point = 0
         tensor[i, start_point:start_point + interval_length] = True 
     return tensor
+
+def length_mask(batch_size, max_length, lengths, device):
+    tensor = torch.full((batch_size, max_length), False, device = device, dtype = torch.bool)
+    for i in range(batch_size):
+        tensor[i, :lengths[i]] = True
+    return tensor

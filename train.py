@@ -31,7 +31,7 @@ import wandb
 from supervoice.config import config
 from supervoice.model_audio import AudioPredictor
 from supervoice.tokenizer import Tokenizer
-from supervoice.tensors import count_parameters, probability_binary_mask, drop_using_mask, interval_mask
+from supervoice.tensors import count_parameters, probability_binary_mask, drop_using_mask, interval_mask, length_mask
 from training.dataset import create_single_sampler, create_single_sampler_balanced, create_batch_sampler, create_async_loader
 
 @dataclass(frozen=True)
@@ -208,70 +208,85 @@ def main():
                     style = style.squeeze(0)
                     audio = audio.squeeze(0)
                     batch_size = audio.shape[0]
-                    seq_len = audio.shape[1]
-                    total += batch_size * seq_len
-                    # print(audio.shape[0] * audio.shape[1])
-                    # print(torch.cuda.memory_allocated(device))
+                    max_seq_len = audio.shape[1]
+                    total += sum(lengths).item()
 
                     # Normalize audio
                     audio = (audio - config.audio.norm_mean) / config.audio.norm_std
 
                     # Prepare CFM
                     times = torch.rand((audio.shape[0],), dtype = audio.dtype)
-                    # sigma = 0.0 # What to use here?
                     t = rearrange(times, 'b -> b 1 1')
                     noise = torch.randn_like(audio)
                     audio_noizy = (1 - (1 - train_sigma) * t) * noise + t * audio
                     flow = audio - (1 - train_sigma) * noise
 
-                    # Interval mask
-                    # 70% - 100% of sequence with a minimum length of 10
-                    min_mask_length = min(max(10, math.floor(seq_len * 0.7)), seq_len)
-                    max_mask_length = seq_len
-                    mask = interval_mask(batch_size, seq_len, min_mask_length, max_mask_length, device = "cpu")
+                    #
+                    # Calculating masks
+                    # * 0.3 probability of dropping condition
+                    # * 0.15 probability of masking whole sequence
+                    #        otherwise mask 70% - 100% of sequence with a minimum length of 10
+                    #
+                    
+                    loss_mask = torch.full((batch_size, max_seq_len), False, device = "cpu", dtype = torch.bool)
+                    condition_mask = torch.full((batch_size, max_seq_len), False, device = "cpu", dtype = torch.bool)
+                    for i in range(batch_size):
 
-                    # 0.15 probability of dropping everything
-                    drop_completely_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.15, device = "cpu")
-                    mask = drop_using_mask(source = mask, replacement = 1, mask = drop_completely_mask)
+                        if random.random() <= 0.2:
 
-                    # Preapply mask
-                    audio = drop_using_mask(source = audio, replacement = 0, mask = mask)
-                    # tokens = drop_using_mask(source = tokens, replacement = 0, mask = mask)
-                    # style = drop_using_mask(source = style, replacement = 0, mask = mask)
+                            # Unconditioned: mask all sequence and all condition
+                            loss_mask[i, 0:lengths[i]] = True
+                            condition_mask[i, 0:lengths[i]] = True
+                        else:
 
-                    # 0.9 probability of dropping unmasked tokens to condition on audio only
-                    # conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.9, device = "cpu").unsqueeze(-1) * ~mask
-                    # tokens = drop_using_mask(source = tokens, replacement = 0, mask = conditional_drop_mask)
-                    # style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
+                            # By default mask everything
+                            mask_length = lengths[i]
+                            mask_offset = 0
 
-                    # 0.4 probability of dropping style tokens
-                    # conditional_drop_mask = probability_binary_mask(shape = (audio.shape[0],), true_prob = 0.4, device = "cpu")
-                    # style = drop_using_mask(source = style, replacement = 0, mask = conditional_drop_mask)
+                            # Reduce mask if possible
+                            if random.random() > 0.2:
 
-                    # print(device, tokens.shape, audio.shape, style.shape)
+                                # 70% - 100% of sequence
+                                min_length = max(10, math.floor(lengths[i] * 0.7))
+                                max_length = lengths[i]
+
+                                # If difference is more than 10 then calculate random mask
+                                if max_length - min_length > 10:
+                                    mask_length = random.randint(min_length, max_length - 10) + 10
+
+                            # Random offset
+                            if mask_length < lengths[i]:
+                                mask_offset = random.randint(0, lengths[i] - mask_length)
+
+                            # Apply mask
+                            loss_mask[i, mask_offset:mask_offset + mask_length] = True
+
+                    # 
+                    # Apply masks
+                    # 
+
+                    audio = drop_using_mask(source = audio, replacement = 0, mask = loss_mask)
+                    tokens = drop_using_mask(source = tokens, replacement = 0, mask = condition_mask)
+                    style = drop_using_mask(source = style, replacement = 0, mask = condition_mask)
 
                     # Train step
                     predicted, loss = model(
 
-                        # Tokens
+                        # Condition
                         tokens = tokens.to(device), 
                         tokens_style = style.to(device),
-
-                        # Audio
                         audio = audio.to(device), 
+
+                        # Noise
                         audio_noizy = audio_noizy.to(device), 
 
                         # Time
                         times = times.to(device), 
 
                         # Loss
-                        mask = mask.to(device), 
+                        mask = loss_mask.to(device), 
                         target = flow.to(device)
                     )
-
-                    # # Check if loss is nan
-                    # if torch.isnan(loss) and accelerator.is_main_process:
-                    #     raise RuntimeError("Loss is NaN")
 
                     # Backprop
                     optim.zero_grad()
@@ -286,10 +301,6 @@ def main():
                     del audio
                     del audio_noizy
                     del times
-                    # del mask
-                    # del flow
-                    # del loss
-                    # del predicted
                     last_loss = loss.detach().cpu().item()
                     del loss
 
