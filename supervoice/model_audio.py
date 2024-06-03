@@ -15,12 +15,13 @@ class AudioPredictor(torch.nn.Module):
         self.flow.transformer.cache_alibi = False
 
         # Token and embedding
-        self.token_embedding = torch.nn.Embedding(self.n_tokens, self.config.n_embeddings)
-        self.style_embedding = torch.nn.Embedding(self.n_style_tokens, self.config.n_embeddings)
-        if self.config.use_direct:
-            self.conditioning = torch.nn.Linear(self.config.n_embeddings, config.audio.n_mels)
+        if self.config.use_original_conditioning:
+            self.token_embedding = torch.nn.Embedding(self.n_tokens, config.audio.n_mels)
+            self.style_embedding = torch.nn.Embedding(self.n_style_tokens, config.audio.n_mels)
         else:
-            self.conditioning = torch.nn.Linear(self.config.n_embeddings, self.config.n_dim)
+            self.token_embedding = torch.nn.Embedding(self.n_tokens, self.config.n_embeddings)
+            self.style_embedding = torch.nn.Embedding(self.n_style_tokens, self.config.n_embeddings)
+            self.conditioning = torch.nn.Linear(self.config.n_embeddings, config.audio.n_mels)
 
 
     def sample(self, *, tokens, tokens_style, audio, mask, steps, alpha = None):
@@ -141,15 +142,15 @@ class AudioPredictor(torch.nn.Module):
         # Conditioning
         #
 
-        # Convert phoneme and style tokens to embeddings
-        tokens_embed = self.token_embedding(tokens)
-        tokens_embed += self.style_embedding(tokens_style)
-        conditioning = self.conditioning(tokens_embed)
-
-        # Direct conditioning on audio
-        if self.config.use_direct:
-            audio = audio + conditioning
-            conditioning = None
+        conditioning = None
+        if self.config.use_original_conditioning:
+            tokens_embed = self.token_embedding(tokens)
+            tokens_embed += self.style_embedding(tokens_style)
+            audio = audio + tokens_embed            
+        else:
+            tokens_embed = self.token_embedding(tokens)
+            tokens_embed += self.style_embedding(tokens_style)
+            conditioning = self.conditioning(tokens_embed)
 
         #
         # Speech Flow
@@ -160,12 +161,13 @@ class AudioPredictor(torch.nn.Module):
             # Inputs
             audio = audio,
             noise = audio_noizy,
-            # condition = conditioning,
-            mask = mask,
+            condition = conditioning,
 
             # Time
             times = times,
             
             # Loss
+            mask = mask,
+            mask_loss = True,
             target = target
         )

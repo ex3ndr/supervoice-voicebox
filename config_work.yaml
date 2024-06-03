@@ -1,0 +1,5 @@
+name: "ft-05"
+source: null
+datasets: ["librilight-medium"]
+steps: 145000
+balanced: true

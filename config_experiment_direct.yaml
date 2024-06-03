@@ -1,5 +1,0 @@
-name: "direct-02"
-source: null
-datasets: ["librilight-medium", "hifi-tts"]
-steps: 145000
-balanced: true

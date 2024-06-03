@@ -54,7 +54,7 @@ config = dict_to_object({
     # Audio predictor
     "audio_predictor": {
         "n_embeddings": 1024,
-        "use_direct": True,
+        "use_original_conditioning": True,
         "n_dim": 1024,
     }
 })
