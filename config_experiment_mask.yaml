@@ -1,6 +1,6 @@
 name: "mask-01"
 source: null
-datasets: ["librilight-medium"]
+datasets: ["librilight-medium", "hifi-tts", "vctk"]
 steps: 145000
-balanced: false
+balanced: true
 mask: true
