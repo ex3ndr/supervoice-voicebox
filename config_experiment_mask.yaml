@@ -1,6 +1,6 @@
-name: "medium-01"
+name: "mask-01"
 source: null
 datasets: ["librilight-medium"]
 steps: 145000
 balanced: false
-mask: false
+mask: true

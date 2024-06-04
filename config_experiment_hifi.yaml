@@ -3,3 +3,4 @@ source: null
 datasets: ["hifi-tts"]
 steps: 145000
 balanced: false
+mask: false

@@ -41,6 +41,7 @@ class TrainingConfig:
     source: Optional[str] = None
     steps: int = 60000
     balanced: bool = False
+    mask: bool = False
 
 # Train
 def main():
@@ -264,6 +265,10 @@ def main():
                     # 
                     # Apply masks
                     # 
+                    
+                    # Zero out tokens if trained with masking tokens
+                    if config.mask:
+                        condition_mask = condition_mask | ~loss_mask
 
                     audio = drop_using_mask(source = audio, replacement = 0, mask = loss_mask)
                     tokens = drop_using_mask(source = tokens, replacement = 0, mask = condition_mask)
