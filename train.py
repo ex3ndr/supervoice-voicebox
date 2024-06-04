@@ -267,7 +267,7 @@ def main():
                     # 
                     
                     # Zero out tokens if trained with masking tokens
-                    if config.mask:
+                    if train_config.mask:
                         condition_mask = condition_mask | ~loss_mask
 
                     audio = drop_using_mask(source = audio, replacement = 0, mask = loss_mask)
