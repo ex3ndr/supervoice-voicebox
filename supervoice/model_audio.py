@@ -21,7 +21,7 @@ class AudioPredictor(torch.nn.Module):
         else:
             self.token_embedding = torch.nn.Embedding(self.n_tokens, self.config.n_embeddings)
             self.style_embedding = torch.nn.Embedding(self.n_style_tokens, self.config.n_embeddings)
-            self.conditioning = torch.nn.Linear(self.config.n_embeddings, config.audio.n_mels)
+            self.conditioning = torch.nn.Linear(self.config.n_embeddings, self.config.n_dim)
 
 
     def sample(self, *, tokens, tokens_style, audio, mask, steps, alpha = None):
