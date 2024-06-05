@@ -9,7 +9,6 @@ class AudioPredictor(torch.nn.Module):
     def __init__(self, flow, config):
         super(AudioPredictor, self).__init__()
         self.n_tokens = len(config.tokenizer.tokens)
-        self.n_style_tokens = config.tokenizer_style.tokens + 1 # +1 Padding
         self.config = config.audio_predictor
         self.flow = flow
         self.flow.transformer.cache_alibi = False
@@ -17,14 +16,12 @@ class AudioPredictor(torch.nn.Module):
         # Token and embedding
         if self.config.use_original_conditioning:
             self.token_embedding = torch.nn.Embedding(self.n_tokens, config.audio.n_mels)
-            self.style_embedding = torch.nn.Embedding(self.n_style_tokens, config.audio.n_mels)
         else:
             self.token_embedding = torch.nn.Embedding(self.n_tokens, self.config.n_embeddings)
-            self.style_embedding = torch.nn.Embedding(self.n_style_tokens, self.config.n_embeddings)
             self.conditioning = torch.nn.Linear(self.config.n_embeddings, self.config.n_dim)
 
 
-    def sample(self, *, tokens, tokens_style, audio, mask, steps, alpha = None):
+    def sample(self, *, tokens, audio, mask, steps, alpha = None):
         
         #
         # Prepare
@@ -54,9 +51,8 @@ class AudioPredictor(torch.nn.Module):
             if alpha is None:
                 return self.forward(
                     tokens = tokens.unsqueeze(0), 
-                    tokens_style = tokens_style.unsqueeze(0), 
                     audio = audio.unsqueeze(0), 
-                    audio_noizy = z.unsqueeze(0), 
+                    noise = z.unsqueeze(0), 
                     times = t.unsqueeze(0)
                 ).squeeze(0)
 
@@ -74,9 +70,8 @@ class AudioPredictor(torch.nn.Module):
             # Inference
             predicted_mix = self.forward(
                 tokens = tokens_t, 
-                tokens_style = tokens_style_t, 
                 audio = audio_t, 
-                audio_noizy = audio_noizy_t, 
+                noise = audio_noizy_t, 
                 times = t_t
             )
             predicted_conditioned = predicted_mix[1]
@@ -106,20 +101,18 @@ class AudioPredictor(torch.nn.Module):
         return merge_predicted(trajectory[-1]), trajectory
 
     def forward(self, *, 
-        # Tokens
+        # Inputs
         tokens, 
-        tokens_style,
-        
-        # Audio
         audio, 
-        audio_noizy, 
-        
+        noise, 
+
         # Time
         times, 
 
         # Training    
         mask = None,
-        target = None
+        target = None,
+        token_scale = 1
     ):
         
         #
@@ -132,8 +125,8 @@ class AudioPredictor(torch.nn.Module):
             raise ValueError('Mask is not required when target is not provided')
 
         # Check shapes
-        assert tokens.shape[0] == audio.shape[0] == audio_noizy.shape[0] == tokens_style.shape[0] # Batch
-        assert tokens.shape[1] == audio.shape[1] == audio_noizy.shape[1] == tokens_style.shape[1] # Sequence length
+        assert tokens.shape[0] == audio.shape[0] == noise.shape[0] # Batch
+        assert tokens.shape[1] == audio.shape[1] == noise.shape[1] # Sequence length
         if mask is not None:
             assert tokens.shape[0] == mask.shape[0]
             assert tokens.shape[1] == mask.shape[1]
@@ -144,12 +137,10 @@ class AudioPredictor(torch.nn.Module):
 
         conditioning = None
         if self.config.use_original_conditioning:
-            tokens_embed = self.token_embedding(tokens)
-            tokens_embed += self.style_embedding(tokens_style)
+            tokens_embed = self.token_embedding(tokens) * token_scale
             audio = audio + tokens_embed            
         else:
             tokens_embed = self.token_embedding(tokens)
-            tokens_embed += self.style_embedding(tokens_style)
             conditioning = self.conditioning(tokens_embed)
 
         #
@@ -160,7 +151,7 @@ class AudioPredictor(torch.nn.Module):
 
             # Inputs
             audio = audio,
-            noise = audio_noizy,
+            noise = noise,
             condition = conditioning,
 
             # Time

@@ -1,6 +1,6 @@
 name: "medium-01"
 source: null
-datasets: ["librilight-medium"]
-steps: 145000
-balanced: false
+datasets: ["librilight-medium", "hifi-tts"]
+steps: 150000
+balanced: true
 mask: false

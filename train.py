@@ -206,7 +206,6 @@ def main():
                     batch = next(train_cycle)
                     tokens, style, audio, lengths = batch
                     tokens = tokens.squeeze(0)
-                    style = style.squeeze(0)
                     audio = audio.squeeze(0)
                     batch_size = audio.shape[0]
                     max_seq_len = audio.shape[1]
@@ -272,18 +271,16 @@ def main():
 
                     audio = drop_using_mask(source = audio, replacement = 0, mask = loss_mask)
                     tokens = drop_using_mask(source = tokens, replacement = 0, mask = condition_mask)
-                    style = drop_using_mask(source = style, replacement = 0, mask = condition_mask)
 
                     # Train step
                     predicted, loss = model(
 
                         # Condition
                         tokens = tokens.to(device), 
-                        tokens_style = style.to(device),
                         audio = audio.to(device), 
 
                         # Noise
-                        audio_noizy = audio_noizy.to(device), 
+                        noise = audio_noizy.to(device), 
 
                         # Time
                         times = times.to(device), 

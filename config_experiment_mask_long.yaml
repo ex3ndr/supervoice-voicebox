@@ -1,0 +1,6 @@
+name: "mask-02"
+source: null
+datasets: ["hifi-tts"]
+steps: 300000
+balanced: false
+mask: true
