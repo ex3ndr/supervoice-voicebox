@@ -62,7 +62,6 @@ class AudioPredictor(torch.nn.Module):
 
             # Mix together
             tokens_t = torch.stack([tokens_empty, tokens], dim = 0)
-            tokens_style_t = torch.stack([tokens_empty, tokens_style], dim = 0)
             audio_t = torch.stack([audio_empty, audio], dim = 0)
             audio_noizy_t = torch.stack([z, z], dim = 0) # Just double it
             t_t = torch.stack([t, t], dim = 0) # Just double it
