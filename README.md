@@ -1,4 +1,6 @@
 # ✨ SuperVoice [BETA]
+Feel free to join my [Discord Server](https://discord.gg/DK8b9AUGRa) to discuss this model!
+
 An independent VoiceBox implementation for voice synthesis. Currently in BETA.
 
 ## Features
