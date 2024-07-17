@@ -1,0 +1,7 @@
+name: "lora-02"
+datasets: ["hifi-tts", "vctk", "libritts"]
+steps: 150000
+lora: true
+gradient_accumulation: 1
+lr_start: 0
+lr_peak: 1e-3

@@ -4,3 +4,4 @@ datasets: ["hifi-tts"]
 steps: 300000
 balanced: false
 mask: true
+lora: false

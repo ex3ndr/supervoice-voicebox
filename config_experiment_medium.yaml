@@ -4,3 +4,4 @@ datasets: ["librilight-medium", "hifi-tts"]
 steps: 150000
 balanced: true
 mask: false
+lora: false

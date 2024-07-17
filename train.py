@@ -18,6 +18,7 @@ from typing import Optional
 from dataclasses import asdict, dataclass, field
 from omegaconf import OmegaConf
 import argparse
+from functools import partial
 
 # ML
 import torch
@@ -32,6 +33,7 @@ from supervoice.config import config
 from supervoice.model_audio import AudioPredictor
 from supervoice.tokenizer import Tokenizer
 from supervoice.tensors import count_parameters, probability_binary_mask, drop_using_mask, interval_mask, length_mask
+from supervoice.minlora import add_lora, apply_to_lora, disable_lora, enable_lora, get_lora_params, merge_lora, name_is_lora, remove_lora, load_multiple_lora, select_lora, LoRAParametrization
 from training.dataset import create_single_sampler, create_single_sampler_balanced, create_batch_sampler, create_async_loader
 
 @dataclass(frozen=True)
@@ -41,7 +43,12 @@ class TrainingConfig:
     source: Optional[str] = None
     steps: int = 60000
     balanced: bool = False
+    gradient_accumulation: int = 2
     mask: bool = False
+    lora: bool = False
+    lr_start: float = 1e-7
+    lr_peak: float = 2e-5
+    lr_warmup: int = 5000
 
 # Train
 def main():
@@ -52,14 +59,9 @@ def main():
     args = parser.parse_args()
 
     # Train parameters
-    train_experiment = "ft-02"
     train_project="supervoice"
-    train_datasets = ["libritts", "vctk"]
     train_voices = None
-    train_source_experiment = None
     train_auto_resume = True
-    train_grad_accum_every = 2
-    train_steps = 60000
     train_loader_workers = 8
     train_log_every = 1
     train_save_every = 1000
@@ -68,9 +70,6 @@ def main():
     train_evaluate_batch_size = 10
     train_target_duration = 6000 # 60 seconds
     train_max_segment_size = 2000 # 20 seconds
-    train_lr_start = 1e-7
-    train_lr_max = 2e-5
-    train_warmup_steps = 5000
     train_mixed_precision = "fp16" # "bf16" or "fp16" or None
     train_clip_grad_norm = 0.2
     train_sigma = 1e-5
@@ -78,72 +77,75 @@ def main():
     # Load config
     print('Loading config ' + str(args.yaml))
     train_config = TrainingConfig(**dict(OmegaConf.merge(TrainingConfig(), OmegaConf.load(args.yaml))))
-    train_experiment = train_config.name
-    train_datasets = train_config.datasets
-    train_steps = train_config.steps
-    train_source_experiment = train_config.source
 
     # Prepare accelerator
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-    accelerator = Accelerator(log_with="wandb", kwargs_handlers=[ddp_kwargs], gradient_accumulation_steps = train_grad_accum_every, mixed_precision=train_mixed_precision)
+    accelerator = Accelerator(log_with="wandb", kwargs_handlers=[ddp_kwargs], gradient_accumulation_steps = train_config.gradient_accumulation, mixed_precision=train_mixed_precision)
     device = accelerator.device
     output_dir = Path("./output")
     output_dir.mkdir(parents=True, exist_ok=True)
     dtype = torch.float16 if train_mixed_precision == "fp16" else (torch.bfloat16 if train_mixed_precision == "bf16" else torch.float32)
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True 
-    # set_seed(42)
-    lr_start = train_lr_start * accelerator.num_processes
-    lr_max = train_lr_max * accelerator.num_processes
+    lr_start = train_config.lr_start * accelerator.num_processes
+    lr_max = train_config.lr_peak * accelerator.num_processes
 
     # Prepare dataset
     accelerator.print("Loading dataset...")
     tokenizer = Tokenizer(config)
     if train_config.balanced:
-        base_sampler = create_single_sampler_balanced(train_datasets)
+        base_sampler = create_single_sampler_balanced(train_config.datasets)
     else:
-        base_sampler = create_single_sampler(train_datasets)
+        base_sampler = create_single_sampler(train_config.datasets)
     sampler = create_batch_sampler(base_sampler, tokenizer, frames = train_target_duration, max_single = train_max_segment_size, dtype = dtype)
     train_loader = create_async_loader(sampler, num_workers = train_loader_workers)
-    # train_loader = get_aligned_dataset_loader(names = train_datasets, voices = train_voices, max_length = train_max_segment_size, workers = train_loader_workers, batch_size = train_batch_size, tokenizer = tokenizer, phoneme_duration = phoneme_duration, dtype = dtype)
 
     # Prepare model
     accelerator.print("Loading model...")
-    step = 0
     flow_model = torch.hub.load(repo_or_dir='ex3ndr/supervoice-flow', model='flow')
     raw_model = AudioPredictor(flow_model, config)
-    model = raw_model
-    # model = torch.compile(model)
+    if train_config.lora:
+        lora_config = {
+            torch.nn.Linear: {
+                "weight": partial(LoRAParametrization.from_linear, rank=64),
+            },
+        }
+        add_lora(raw_model.flow, lora_config)
+        trainable_parameters = list(get_lora_params(raw_model.flow))
+        trainable_parameters += list(raw_model.token_embedding.parameters())
+        if hasattr(raw_model, 'conditioning'):
+            trainable_parameters += list(raw_model.conditioning.parameters())
+    else:
+        trainable_parameters = list(raw_model.parameters())
+
+    # Optimizer
+    step = 0
     wd_params, no_wd_params = [], []
-    for param in model.parameters():
+    for param in trainable_parameters:
         param_list = no_wd_params if param.ndim < 2 else wd_params
         param_list.append(param)
     optim = torch.optim.AdamW([{'params': wd_params}, {'params': no_wd_params, 'weight_decay': 0}], lr_max, betas=[0.9, 0.99], weight_decay=0.01)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = train_steps)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = train_config.steps)
 
     # Accelerate
-    model, optim = accelerator.prepare(model, optim)
+    model, optim = accelerator.prepare(raw_model, optim)
     train_cycle = cycle(train_loader)
-    hps = {
+    hps = dict(OmegaConf.merge({
         "segment_size": train_max_segment_size, 
-        "train_lr_start": train_lr_start, 
-        "train_lr_max": train_lr_max, 
-        "grad_accum_every": train_grad_accum_every,
-        "steps": train_steps, 
-        "warmup_steps": train_warmup_steps,
         "mixed_precision": train_mixed_precision,
         "clip_grad_norm": train_clip_grad_norm,
-    }
+    }, train_config))
+    accelerator.print(hps)
     accelerator.init_trackers(train_project, config=hps)
     if accelerator.is_main_process:
-        wandb.watch(model, log="all", log_freq=train_watch_every * train_grad_accum_every)
+        wandb.watch(model, log="all", log_freq=train_watch_every * train_config.gradient_accumulation)
 
     # Save
     def save():
         
         # Save step checkpoint
-        fname = str(output_dir / f"{train_experiment}.pt")
-        fname_step = str(output_dir / f"{train_experiment}.{step}.pt")
+        fname = str(output_dir / f"{train_config.name}.pt")
+        fname_step = str(output_dir / f"{train_config.name}.{step}.pt")
         torch.save({
 
             # Model
@@ -161,10 +163,10 @@ def main():
 
     # Load
     source = None
-    if (output_dir / f"{train_experiment}.pt").exists():
-        source = train_experiment
-    elif train_source_experiment and (output_dir / f"{train_source_experiment}.pt").exists():
-        source = train_source_experiment
+    if (output_dir / f"{train_config.name}.pt").exists():
+        source = train_config.name
+    elif train_config.source and (output_dir / f"{train_config.source}.pt").exists():
+        source = train_config.source
 
     if train_auto_resume and source is not None:
         accelerator.print("Resuming training...")
@@ -186,8 +188,8 @@ def main():
         model.train()
 
         # Update LR
-        if step < train_warmup_steps:
-            lr = (lr_start + ((lr_max - lr_start) * step) / train_warmup_steps)
+        if step < train_config.lr_warmup:
+            lr = (lr_start + ((lr_max - lr_start) * step) / train_config.lr_warmup)
             for param_group in optim.param_groups:
                 param_group['lr'] = lr
             lr = lr / accelerator.num_processes
@@ -198,7 +200,7 @@ def main():
         # Load batch
         total = 0
         last_loss = 0
-        for _ in range(train_grad_accum_every):
+        for _ in range(train_config.gradient_accumulation):
             with accelerator.accumulate(model):
                 with accelerator.autocast():
 
@@ -290,11 +292,14 @@ def main():
                         target = flow.to(device)
                     )
 
+                    # Rescale loss
+                    loss = loss / train_config.gradient_accumulation
+
                     # Backprop
                     optim.zero_grad()
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:
-                        accelerator.clip_grad_norm_(model.parameters(), train_clip_grad_norm)
+                        accelerator.clip_grad_norm_(trainable_parameters, train_clip_grad_norm)
                     optim.step()
 
                     # Cleanup
@@ -318,7 +323,7 @@ def main():
     #
 
     accelerator.print("Training started at step", step)
-    while step < train_steps:
+    while step < train_config.steps:
         start = time.time()
         loss, total, lr = train_step()
         total = total * accelerator.num_processes # Scale to all processes

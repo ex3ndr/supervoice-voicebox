@@ -54,6 +54,9 @@ def execute_parallel(args):
     # Trim silence
     if vad:
         waveform = trim_silence(waveform, config.audio.sample_rate)
+    
+    # Rescale
+    waveform = waveform / waveform.abs().max()
 
     # Enhance audio
     # waveform = improve_audio(waveform, config.audio.sample_rate)

@@ -3,3 +3,4 @@ source: "stage-01"
 datasets: ["hifi-tts"]
 steps: 60000
 balanced: false
+lora: false
