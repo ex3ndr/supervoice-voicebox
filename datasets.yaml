@@ -5,8 +5,5 @@ datasets:
   - libritts-r@clean-100
   - libritts-r@clean-360
   - libritts-r@other-500
-  - common-voice-16.0-en
-  - common-voice-16.0-ru
-  - common-voice-16.0-uk
   - esd
   - librilight-processed
