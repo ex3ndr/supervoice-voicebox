@@ -1,4 +1,4 @@
-# ✨ SuperVoice [BETA]
+# ✨ SuperVoice VoiceBox
 Feel free to join my [Discord Server](https://discord.gg/DK8b9AUGRa) to discuss this model!
 
 An independent VoiceBox implementation for voice synthesis. Currently in BETA.
@@ -40,7 +40,7 @@ gpt.to(device)
 gpt.eval()
 
 # Main Model
-model = torch.hub.load(repo_or_dir='ex3ndr/supervoice', model='phonemizer', gpt=gpt, vocoder=vocoder)
+model = torch.hub.load(repo_or_dir='ex3ndr/supervoice-voicebox', model='phonemizer', gpt=gpt, vocoder=vocoder)
 model.to(device)
 model.eval()
 
